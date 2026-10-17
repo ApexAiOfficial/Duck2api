@@ -1,10 +1,14 @@
 package initialize
 
 import (
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"aurora/internal/duckgo"
+	"aurora/internal/proxys"
 )
 
 func TestParseDuckDuckGoModels(t *testing.T) {
@@ -78,5 +82,62 @@ func TestUnavailableModelsAreFiltered(t *testing.T) {
 	}
 	if !hasModelID(result.Data, duckgo.ToolImageChatModel) {
 		t.Errorf("工具出图载体 %q 被误删，出图能力会跟着消失", duckgo.ToolImageChatModel)
+	}
+}
+
+// 模型列表缓存与回退：/v1/models 是客户端启动必拉的东西，不能每次都被上游抖动带走。
+func TestModelsCacheAndFallback(t *testing.T) {
+	saved := fetchModelsUpstream
+	t.Cleanup(func() { fetchModelsUpstream = saved })
+
+	reset := func() {
+		modelsMu.Lock()
+		modelsCache, modelsCachedAt = openAIModelsResponse{}, time.Time{}
+		modelsMu.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+
+	calls := 0
+	models := openAIModelsResponse{Object: "list", Data: []openAIModel{{ID: "cached-model", Object: "model"}}}
+	fetchModelsUpstream = func(proxys.Identity) (openAIModelsResponse, int, error) {
+		calls++
+		return models, http.StatusOK, nil
+	}
+
+	// 1) 第一次打上游，第二次命中缓存
+	if got := fetchDuckDuckGoModels(proxys.Identity{}); len(got.Data) != 1 || got.Data[0].ID != "cached-model" {
+		t.Fatalf("首次结果不对: %+v", got)
+	}
+	fetchDuckDuckGoModels(proxys.Identity{})
+	if calls != 1 {
+		t.Errorf("60s 内第二次仍打上游，缓存没生效: calls=%d", calls)
+	}
+
+	// 2) 缓存过期 + 上游失败 → 回上次成功的列表
+	modelsCacheTTLExpired := func() {
+		modelsMu.Lock()
+		modelsCachedAt = time.Now().Add(-2 * modelsCacheTTL)
+		modelsMu.Unlock()
+	}
+	modelsCacheTTLExpired()
+	fetchModelsUpstream = func(proxys.Identity) (openAIModelsResponse, int, error) {
+		calls++
+		return openAIModelsResponse{}, http.StatusBadGateway, errors.New("boom")
+	}
+	if got := fetchDuckDuckGoModels(proxys.Identity{}); len(got.Data) != 1 || got.Data[0].ID != "cached-model" {
+		t.Errorf("上游失败时应回上次成功的列表，实际: %+v", got)
+	}
+
+	// 3) 冷启动 + 上游失败 → hiddenModels 兜底
+	reset()
+	got := fetchDuckDuckGoModels(proxys.Identity{})
+	if len(got.Data) != len(hiddenModels) {
+		t.Fatalf("冷启动兜底应回 %d 项 hiddenModels，实际 %d 项: %+v", len(hiddenModels), len(got.Data), got)
+	}
+	for _, h := range hiddenModels {
+		if !hasModelID(got.Data, h.id) {
+			t.Errorf("兜底列表缺 %q", h.id)
+		}
 	}
 }

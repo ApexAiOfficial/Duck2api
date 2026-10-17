@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -35,7 +37,55 @@ type openAIModelsResponse struct {
 	Data   []openAIModel `json:"data"`
 }
 
-func fetchDuckDuckGoModels(ident proxys.Identity) (openAIModelsResponse, int, error) {
+// modelsCacheTTL 是模型列表的缓存期。上游目录一天变不了几次，而 /v1/models 是客户端
+// 启动必拉的东西 —— 每次请求都去上游，等于把启动成功率绑在上游抖动上。
+const modelsCacheTTL = 60 * time.Second
+
+var (
+	modelsMu       sync.Mutex
+	modelsCache    openAIModelsResponse
+	modelsCachedAt time.Time
+	// 测试可替换（同 duckgoConvert.FileStore 的做法）。
+	fetchModelsUpstream = fetchModelsFromDuckDuckGo
+)
+
+// fetchDuckDuckGoModels 依次尝试：新鲜缓存 → 上游 → 上次成功的列表 → 冷启动兜底。
+// 最后两级意味着它不再返回错误：宁可给一份旧列表，也不让整条 UI 空掉。
+func fetchDuckDuckGoModels(ident proxys.Identity) openAIModelsResponse {
+	modelsMu.Lock()
+	defer modelsMu.Unlock()
+
+	if !modelsCachedAt.IsZero() && time.Since(modelsCachedAt) < modelsCacheTTL {
+		return modelsCache
+	}
+
+	models, statusCode, err := fetchModelsUpstream(ident)
+	if err == nil {
+		modelsCache, modelsCachedAt = models, time.Now()
+		return models
+	}
+
+	// 上游失败时回上一次成功的列表。日志留着，别让上游真挂了这件事只消失在这里。
+	if !modelsCachedAt.IsZero() {
+		log.Printf("[MODELS] 上游取模型列表失败(%d)，回用 %s 的缓存: %v", statusCode, modelsCachedAt.Format(time.RFC3339), err)
+		return modelsCache
+	}
+	log.Printf("[MODELS] 上游取模型列表失败(%d)，冷启动无缓存，回退到 hiddenModels: %v", statusCode, err)
+	return fallbackModels()
+}
+
+// fallbackModels 冷启动 + 上游不可用时的最小列表。只取 hiddenModels —— 那本来就是为了
+// 「客户端点得到」而维护的一份真实 id，不另立常量表，免得两处一起烂。
+func fallbackModels() openAIModelsResponse {
+	created := time.Now().Unix()
+	out := openAIModelsResponse{Object: "list", Data: make([]openAIModel, 0, len(hiddenModels))}
+	for _, h := range hiddenModels {
+		out.Data = append(out.Data, openAIModel{ID: h.id, Object: "model", Created: created, OwnedBy: h.ownedBy})
+	}
+	return out
+}
+
+func fetchModelsFromDuckDuckGo(ident proxys.Identity) (openAIModelsResponse, int, error) {
 	client := resty.NewStdClient()
 	if ident.Proxy != "" {
 		if err := client.SetProxy(ident.Proxy); err != nil {

@@ -860,11 +860,5 @@ func (h *Handler) doImageEdit(c *gin.Context, prompt string, imageB64 string) {
 }
 
 func (h *Handler) engines(c *gin.Context) {
-	models, statusCode, err := fetchDuckDuckGoModels(h.proxy.GetIdentity())
-	if err != nil {
-		writeErrorBody(c, statusCode, duckgo.GatewayErrorMessage(err), "upstream_error", "models_fetch_failed", err)
-		return
-	}
-
-	c.JSON(http.StatusOK, models)
+	c.JSON(http.StatusOK, fetchDuckDuckGoModels(h.proxy.GetIdentity()))
 }

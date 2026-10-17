@@ -511,22 +511,23 @@ curl http://localhost:8080/ping
 
 ## 支持的模型
 
+完整清单以 `GET /v1/models` 为准（只列实测打得通的 id）。
+
 ### 通用模型
 
 | 模型 ID | 说明 |
 |---------|------|
 | `claude-haiku-4-5` | Anthropic Claude Haiku 4.5 |
-| `mistral-small` | Mistral Small |
-| `tinfoil/gpt-oss-120b` | OpenAI GPT-1.5 120B |
-
-
+| `mistral-small-2603` | Mistral Small 4 |
+| `tinfoil/gemma4-31b` | Google Gemma 4 31B |
 
 ### 推理模型
 
 | 模型 ID | 说明 |
 |---------|------|
-| `gpt-5.4-nano` | OpenAI GPT-5.4 Nano（推理） |
 | `gpt-5.4-mini` | OpenAI GPT-5.4 Mini（推理） |
+| `gpt-5.6-luna` | OpenAI GPT-5.6 Luna（推理） |
+| `gpt-6-luna` | OpenAI GPT-6 Luna |
 
 ---
 

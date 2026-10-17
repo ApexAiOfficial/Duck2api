@@ -187,20 +187,15 @@ curl http://localhost:8080/v1/audio/speech \
 |------|------|------|
 | `gpt-6-luna` | 通用 | GPT-6 Luna（上游列表未公开，本项目补入 `/v1/models`） |
 | `gpt-5.6-luna` | 推理 | GPT-5.6 Luna |
-| `gpt-5.6-terra` | 推理 | GPT-5.6 Terra，需 plus/pro |
-| `gpt-5.6-sol` | 推理 | GPT-5.6 Sol，需 pro |
 | `gpt-5.4-mini` | 推理 | GPT-5.4 mini |
-| `claude-sonnet-4-6` | 推理 | Claude Sonnet 4.6，需 plus/pro |
-| `claude-opus-4-8` | 推理 | Claude Opus 4.8，需 pro |
 | `claude-haiku-4-5` | 通用 | Claude Haiku 4.5 |
 | `tinfoil/gemma4-31b` | 通用 | Gemma 4 31B |
-| `mistral-small-2603` | 通用 | Mistral Small 4（上游当前下架） |
-| `tinfoil/gpt-oss-120b` | 通用 | gpt-oss 120B（上游当前返回 400） |
+| `mistral-small-2603` | 通用 | Mistral Small 4 |
 | `image-generation` | 出图 | duck.ai 原生图片模型：文生图与改图默认走它（上游列表未公开，本项目补入 `/v1/models`） |
 | `gpt-image-1.5` | 出图别名 | 等同 `image-generation`，名字取自成品图 C2PA 里的生成器名 |
 | `gpt-image-2` | 出图别名 | 走「聊天模型 + `GenerateImage` 工具」（提示词会被上游改写，本项目已包严格指令） |
 
-清单就是 `/v1/models` 的实时输出（直接透传上游 + 补入 `gpt-6-luna` 与三个出图模型/别名）。标「需 plus/pro」的模型在匿名档会被上游拒成 `404 ERR_MODEL_RESTRICTED`，要它们得配登录态。读图能力跟模型绑定（`supportsImageUpload`），出图则是独立的原生图片模型（详见下面的图像生成/编辑两节）。
+清单就是 `/v1/models` 的实时输出（直接透传上游 + 补入 `gpt-6-luna` 与三个出图模型/别名），**表里只有实测打得通的 id**：上游仍列出、但匿名档一律 400 的（`gpt-5.6-terra`/`gpt-5.6-sol`/`claude-sonnet-4-6`/`claude-opus-4-8`）和每次 500 的 `tinfoil/gpt-oss-120b` 已从列表摘掉，黑名单见 `internal/initialize/models.go`。要它们得配登录态。读图能力跟模型绑定（`supportsImageUpload`），出图则是独立的原生图片模型（详见下面的图像生成/编辑两节）。
 
 ## 高级设置
 

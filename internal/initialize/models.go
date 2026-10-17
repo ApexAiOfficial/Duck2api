@@ -168,18 +168,18 @@ const hiddenModelID = "gpt-6-luna"
 // 实测（2026-10-08/09/10 各一次）tinfoil/gpt-oss-120b 每次都 500 upstream_failure、~4s，
 // 跨天确定性复现。上游哪天修好了就把这行删掉。
 //
-// gpt-5.6-terra / gpt-5.6-sol：上游列表还挂着（2026-10-17 实测），但匿名调用一律
-// 400 model_not_available。duck.ai 前端模型选择器已经不再提供 5.6 这两档，客户端照列表
-// 点过去只会拿到 400，按「官网已下架」一并摘掉。
+// gpt-5.6-terra / gpt-5.6-sol / claude-sonnet-4-6 / claude-opus-4-8：上游列表还挂着
+// （2026-10-17 实测），但匿名调用一律 400 model_not_available。客户端照列表点过去只会拿到
+// 400，所以从枚举里摘掉 —— 上游哪天开权限，从这张表删一行就恢复可见。
+//
 // 注意不摘 gpt-5.6-luna：它同批名单里唯一还能用的（同日实测 200 正常答），而且是工具路径
 // 出图的默认载体（duckgo.ToolImageChatModel），摘了等于把出图能力一起摘掉。
-//
-// 其余三个匿名无权限的（claude-sonnet-4-6 / claude-opus-4-8 / mistral-small-2603）不摘：
-// 它们仍在上游目录里，回的是 typed 400 model_not_available，原因明确、也可能哪天开权限。
 var unavailableModelIDs = map[string]bool{
 	"tinfoil/gpt-oss-120b": true,
 	"gpt-5.6-terra":        true,
 	"gpt-5.6-sol":          true,
+	"claude-sonnet-4-6":    true,
+	"claude-opus-4-8":      true,
 }
 
 // 上游列表里没有、但本网关实测可请求的模型。客户端靠 /v1/models 枚举，不在这里列出就点不到。

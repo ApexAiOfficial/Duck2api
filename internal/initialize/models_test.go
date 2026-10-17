@@ -141,3 +141,13 @@ func TestModelsCacheAndFallback(t *testing.T) {
 		}
 	}
 }
+
+// 黑名单与补录表不能有交集：先被滤掉、再被 hiddenModels 补回来，黑名单就成了摆设
+// （这就是「想摘 gpt-5.6-luna 摘不掉」的原因）。
+func TestBlocklistDoesNotOverlapHiddenModels(t *testing.T) {
+	for _, h := range hiddenModels {
+		if unavailableModelIDs[h.id] {
+			t.Errorf("%q 同时在黑名单和 hiddenModels 里，滤了也会被补回来", h.id)
+		}
+	}
+}

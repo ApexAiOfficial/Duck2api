@@ -55,6 +55,35 @@ func contentText(content interface{}) string {
 	return string(b)
 }
 
+// modelAliases 把客户端习惯用的旧名映射到上游当前的 id。
+//
+// 目标只许填 /v1/models 里真能打通的 id。这张表原先指着 gpt-4o-mini、
+// claude-3-haiku-20240307、meta-llama/... 这些上游早已不认的串，客户端传
+// gpt-3.5-turbo 直接吃 400 model_not_available（2026-10-17 线上实测三个全挂）。
+// 接 gpt-4* 是因为 OpenAI SDK 的示例基本都写 gpt-4o / gpt-4o-mini。
+// llama/mixtral 落到 gemma4-31b 而不是 tinfoil/gpt-oss-120b：后者每次都 500。
+// 顺序即优先级；前缀不许放宽到 gpt-5，那会劫持 gpt-5.6-luna。
+var modelAliases = []struct{ prefix, target string }{
+	{"gpt-3.5", "gpt-5.4-mini"},
+	{"gpt-4", "gpt-5.4-mini"},
+	{"claude-3-haiku", "claude-haiku-4-5"},
+	{"claude-3-5-haiku", "claude-haiku-4-5"},
+	{"llama", "tinfoil/gemma4-31b"},
+	{"mixtral", "tinfoil/gemma4-31b"},
+	{"mistral-small", "mistral-small-2603"},
+}
+
+// resolveModelAlias 认不出就原样返回（上游新 id 不必进表）。
+func resolveModelAlias(name string) string {
+	lower := strings.ToLower(name)
+	for _, a := range modelAliases {
+		if strings.HasPrefix(lower, a.prefix) {
+			return a.target
+		}
+	}
+	return name
+}
+
 func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiRequest {
 	return ConvertAPIRequestWithOptions(apiRequest, "", false)
 }
@@ -62,23 +91,7 @@ func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiReque
 func ConvertAPIRequestWithOptions(apiRequest officialtypes.APIRequest, reasoningEffort string, webSearch bool) duckgotypes.ApiRequest {
 	inputModel := apiRequest.Model
 	duckgoRequest := duckgotypes.NewApiRequest(inputModel)
-	realModel := inputModel
-
-	modelLower := strings.ToLower(inputModel)
-	switch {
-	case strings.HasPrefix(modelLower, "gpt-3.5"):
-		realModel = "gpt-4o-mini"
-	case strings.HasPrefix(modelLower, "claude-3-haiku"):
-		realModel = "claude-3-haiku-20240307"
-	case strings.HasPrefix(modelLower, "llama-3.3-70b"):
-		realModel = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-	case strings.HasPrefix(modelLower, "mixtral-8x7b"):
-		realModel = "mistralai/Mixtral-8x7B-Instruct-v0.1"
-	case strings.HasPrefix(modelLower, "llama-4-scout"):
-		realModel = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
-	case strings.HasPrefix(modelLower, "mistral-small"):
-		realModel = "mistralai/Mistral-Small-24B-Instruct-2501"
-	}
+	realModel := resolveModelAlias(inputModel)
 
 	duckgoRequest.Model = realModel
 

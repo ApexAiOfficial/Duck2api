@@ -16,6 +16,8 @@ func RegisterRouter() *gin.Engine {
 	router.Use(middlewares.Cors)
 	// 全局，早于任何鉴权与解析：超大 body 在进 handler 之前就被截断。
 	router.Use(middlewares.BodyLimit)
+	// 在鉴权之前：被 401 挡掉的请求往往正是排查起点，不能不留痕迹。
+	router.Use(middlewares.FlightRecorder)
 
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -81,4 +83,8 @@ func registerRoutes(group *gin.RouterGroup, handler *Handler) {
 	// Models
 	group.OPTIONS("/v1/models", optionsHandler)
 	group.GET("/v1/models", middlewares.Authorization, handler.engines)
+
+	// 只读运维快照：上游还活着吗、刚才那批请求是怎么失败的。
+	// 和 /v1/models 一样走鉴权（配了密钥就该拦），并且它永远不碰上游。
+	group.GET("/v1/status", middlewares.Authorization, handler.flightStatus)
 }

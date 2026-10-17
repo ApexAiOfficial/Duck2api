@@ -4,6 +4,7 @@ import (
 	duckgoConvert "aurora/internal/conversion/requests/duckgo"
 	"aurora/internal/duckgo"
 	"aurora/internal/httpclient/resty"
+	"aurora/internal/middlewares"
 	"aurora/internal/proxys"
 	duckgotypes "aurora/internal/typings/duckgo"
 	officialtypes "aurora/internal/typings/official"
@@ -59,6 +60,8 @@ func writeErrorBody(c *gin.Context, status int, message, errType, code string, e
 	if err != nil {
 		log.Printf("[ERROR] %s (%s): %v", code, message, err)
 	}
+	// 给 flight recorder 留一份稳定的分类码：排查时要的是 "哪个 code"，不是响应体原文。
+	c.Set("flight_code", code)
 	c.JSON(status, gin.H{"error": gin.H{
 		"message": message,
 		"type":    errType,
@@ -861,4 +864,9 @@ func (h *Handler) doImageEdit(c *gin.Context, prompt string, imageB64 string) {
 
 func (h *Handler) engines(c *gin.Context) {
 	c.JSON(http.StatusOK, fetchDuckDuckGoModels(h.proxy.GetIdentity()))
+}
+
+// flightStatus 只读当前进程的请求快照，不碰上游、不耗挑战额度。
+func (h *Handler) flightStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, middlewares.FlightStatus())
 }

@@ -28,12 +28,7 @@ type anthropicStreamResult struct {
 func (h *Handler) messagesHandler(c *gin.Context) {
 	var req anthropic.MessagesRequest
 	if err := c.BindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
-		}})
+		writeBadRequest(c, "Request must be proper JSON", "invalid_json", err)
 		return
 	}
 

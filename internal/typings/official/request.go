@@ -13,7 +13,10 @@ type APIRequest struct {
 	PluginIDs []string     `json:"plugin_ids"`
 	// Extra fields for Duck.ai features (not standard OpenAI)
 	ReasoningEffort string `json:"reasoning_effort,omitempty"` // "none", "low", "medium", "high"
-	WebSearch       *bool  `json:"web_search,omitempty"`       // enable web search
+	// Reasoning 是 OpenAI 原生的嵌套形状 {"effort":"medium","summary":"auto"}。
+	// Hermes/codex 系客户端只发这个、不发扁平的 reasoning_effort —— 不认它就永远停在 fast mode。
+	Reasoning *ReasoningConfig `json:"reasoning,omitempty"`
+	WebSearch *bool            `json:"web_search,omitempty"` // enable web search
 	// Tools / ToolChoice: 函数调用定义。上游 duck.ai 没有函数调用通道, 由
 	// internal/conversion/requests/duckgo 把它们注入提示词模拟, 见 internal/duckgo/toolcall.go。
 	Tools      interface{} `json:"tools,omitempty"`
@@ -21,6 +24,19 @@ type APIRequest struct {
 	// CustomTools 是 type=="custom"（自由格式输入、没有 JSON Schema）的工具名。
 	// 只用于回写：Responses 要把它们回成 custom_tool_call。json:"-" 不上游。
 	CustomTools []string `json:"-"`
+}
+
+// ReasoningConfig 是嵌套 reasoning 段里我们真正用得上的那一项。
+type ReasoningConfig struct {
+	Effort string `json:"effort"`
+}
+
+// EffortOrEmpty 让调用方不用先判 nil。
+func (r *ReasoningConfig) EffortOrEmpty() string {
+	if r == nil {
+		return ""
+	}
+	return r.Effort
 }
 
 type ApiMessage struct {
@@ -41,6 +57,8 @@ type ResponseAPIRequest struct {
 	Tools              interface{} `json:"tools"`
 	ToolChoice         interface{} `json:"tool_choice"`
 	ReasoningEffort    string      `json:"reasoning_effort,omitempty"`
+	// Reasoning 见 APIRequest.Reasoning：codex 客户端发的是嵌套形状。
+	Reasoning *ReasoningConfig `json:"reasoning,omitempty"`
 }
 
 // CollectedTools 汇总这次请求里客户端声明的所有工具。

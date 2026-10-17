@@ -14,6 +14,8 @@ func RegisterRouter() *gin.Engine {
 
 	router := gin.Default()
 	router.Use(middlewares.Cors)
+	// 全局，早于任何鉴权与解析：超大 body 在进 handler 之前就被截断。
+	router.Use(middlewares.BodyLimit)
 
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{

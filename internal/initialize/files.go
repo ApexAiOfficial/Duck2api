@@ -81,11 +81,7 @@ func deleteFile(id string) bool {
 func (h *Handler) filesUpload(c *gin.Context) {
 	// Parse multipart form
 	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be multipart/form-data",
-			"type":    "invalid_request_error",
-			"code":    err.Error(),
-		}})
+		writeBadRequest(c, "Request must be multipart/form-data", "invalid_multipart", err)
 		return
 	}
 
@@ -108,11 +104,7 @@ func (h *Handler) filesUpload(c *gin.Context) {
 
 	fileBytes, err := io.ReadAll(file)
 	if err != nil {
-		c.JSON(500, gin.H{"error": gin.H{
-			"message": "Failed to read file",
-			"type":    "internal_server_error",
-			"code":    err.Error(),
-		}})
+		writeInternal(c, "Failed to read file", "read_failed", err)
 		return
 	}
 
@@ -222,11 +214,7 @@ func (h *Handler) filesContent(c *gin.Context) {
 func (h *Handler) audioTranscriptions(c *gin.Context) {
 	// Parse multipart form
 	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be multipart/form-data",
-			"type":    "invalid_request_error",
-			"code":    err.Error(),
-		}})
+		writeBadRequest(c, "Request must be multipart/form-data", "invalid_multipart", err)
 		return
 	}
 
@@ -244,11 +232,7 @@ func (h *Handler) audioTranscriptions(c *gin.Context) {
 
 	audioBytes, err := io.ReadAll(file)
 	if err != nil {
-		c.JSON(500, gin.H{"error": gin.H{
-			"message": "Failed to read audio file",
-			"type":    "internal_server_error",
-			"code":    err.Error(),
-		}})
+		writeInternal(c, "Failed to read audio file", "read_failed", err)
 		return
 	}
 
@@ -261,11 +245,7 @@ func (h *Handler) audioTranscriptions(c *gin.Context) {
 	// Call Duck.ai dictation endpoint
 	text, err := h.callDictation(audioBytes, contentType)
 	if err != nil {
-		c.JSON(upstreamStatus(c, err), gin.H{"error": gin.H{
-			"message": "Transcription failed",
-			"type":    "internal_server_error",
-			"code":    err.Error(),
-		}})
+		writeGatewayError(c, err)
 		return
 	}
 
@@ -366,11 +346,7 @@ func (h *Handler) chatWithFiles(c *gin.Context) {
 		FileIDs []string `json:"file_ids,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"code":    err.Error(),
-		}})
+		writeBadRequest(c, "Request must be proper JSON", "invalid_json", err)
 		return
 	}
 
@@ -412,12 +388,13 @@ func (h *Handler) chatWithFiles(c *gin.Context) {
 
 	translated_request, response, err := h.startDuckDuckGoRequest(req.APIRequest)
 	if err != nil {
-		c.JSON(upstreamStatus(c, err), gin.H{"error": err.Error()})
+		writeGatewayError(c, err)
 		return
 	}
 	defer response.Body.Close()
 
-	if duckgo.Handle_request_error(c, response) {
+	if response.StatusCode != 200 {
+		writeUpstreamFailure(c, response)
 		return
 	}
 

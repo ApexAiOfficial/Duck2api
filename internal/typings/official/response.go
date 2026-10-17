@@ -34,6 +34,8 @@ type Delta struct {
 	Content   string          `json:"content,omitempty"`
 	Role      string          `json:"role,omitempty"`
 	ToolCalls []ToolCallChunk `json:"tool_calls,omitempty"`
+	// ReasoningContent 是思维增量（DeepSeek/OpenAI 兼容客户端约定的字段名）。
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 func NewChatCompletionChunk(text string) ChatCompletionChunk {
@@ -69,6 +71,17 @@ func NewChatCompletionChunkWithModel(text string, model string) ChatCompletionCh
 				FinishReason: nil,
 			},
 		},
+	}
+}
+
+// NewReasoningChunkWithModel 流式下发一段思维增量: 走 delta.reasoning_content, 不进 content。
+func NewReasoningChunkWithModel(text string, model string) ChatCompletionChunk {
+	return ChatCompletionChunk{
+		ID:      "chatcmpl-QXlha2FBbmROaXhpZUFyZUF3ZXNvbWUK",
+		Object:  "chat.completion.chunk",
+		Created: time.Now().Unix(),
+		Model:   model,
+		Choices: []Choices{{Index: 0, Delta: Delta{ReasoningContent: text}}},
 	}
 }
 
@@ -144,6 +157,8 @@ type ChatCompletion struct {
 type Msg struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ReasoningContent 非流式的思维全文，与 Delta 同名字段对应。
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 	// ToolCalls 非空时按 OpenAI 规范应把 content 置空; 这里保持空串, 客户端都以 tool_calls 为准
 	ToolCalls []ToolCallChunk `json:"tool_calls,omitempty"`
 }
@@ -197,12 +212,41 @@ type ResponseOutput struct {
 	Role   string `json:"role,omitempty"`
 	// Content 只有 message 项有; function_call 项靠下面三个字段,
 	// 所以 role/content 都 omitempty, 免得多出空 role/content 干扰客户端。
-	Content   []ResponseOutputContent `json:"content,omitempty"`
+	Content []ResponseOutputContent `json:"content,omitempty"`
+	// Summary 只有 reasoning 项有（OpenAI 的形状：思维放在 summary 数组里）。
+	Summary   []ResponseOutputSummary `json:"summary,omitempty"`
 	CallID    string                  `json:"call_id,omitempty"`
 	Name      string                  `json:"name,omitempty"`
 	Arguments string                  `json:"arguments,omitempty"`
 	// Input 是自定义工具（custom_tool_call）的原始文本入参；function_call 不用它。
 	Input string `json:"input,omitempty"`
+}
+
+type ResponseOutputSummary struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// NewResponseReasoning 构造 Responses 的 reasoning 输出项。刻意不带 encrypted_content：
+// 上游那份加密思维体回放不了（见 skill），而 Hermes 只回放带 encrypted_content 的项，
+// 不带就永远不会被回放，也就不会在下一轮换来 400。
+func NewResponseReasoning(text string) ResponseOutput {
+	return ResponseOutput{
+		ID:     "rs_QXlha2FBbmROaXhpZUFyZUF3ZXNvbWUK",
+		Type:   "reasoning",
+		Status: "completed",
+		Summary: []ResponseOutputSummary{
+			{Type: "summary_text", Text: text},
+		},
+	}
+}
+
+// PrependReasoning 把思维项放到 output 最前（OpenAI 的顺序是 reasoning 先于 message）。
+func (r *ResponseAPI) PrependReasoning(text string) {
+	if text == "" {
+		return
+	}
+	r.Output = append([]ResponseOutput{NewResponseReasoning(text)}, r.Output...)
 }
 
 type ResponseOutputContent struct {
@@ -228,8 +272,10 @@ type ResponseStreamEvent struct {
 	Part         any             `json:"part,omitempty"`
 	OutputIndex  int             `json:"output_index,omitempty"`
 	ContentIndex int             `json:"content_index,omitempty"`
-	Delta        string          `json:"delta,omitempty"`
-	Text         string          `json:"text,omitempty"`
+	// SummaryIndex 只有 response.reasoning_summary_text.* 用。
+	SummaryIndex int    `json:"summary_index,omitempty"`
+	Delta        string `json:"delta,omitempty"`
+	Text         string `json:"text,omitempty"`
 }
 
 func (event ResponseStreamEvent) String() string {

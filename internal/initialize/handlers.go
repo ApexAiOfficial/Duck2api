@@ -50,6 +50,33 @@ func upstreamStatus(c *gin.Context, err error) int {
 	return http.StatusInternalServerError
 }
 
+// writeErrorBody 是所有错误响应体唯一的出口。存在的理由：这些体原先在二十多处各自
+// 手搓，于是「上游原文只进日志」这条规矩只在部分站点成立 —— 图片/语音/files 那几条路
+// 把 err.Error() 与上游 body（含 r:<uuid>、overrideCode、代理地址）原样回了客户端。
+// 收敛到一处之后，改规矩只改这里，也不用再逐个站点审计。
+// err 为 nil 表示没有可记录的细节（比如纯客户端输入错误）。
+func writeErrorBody(c *gin.Context, status int, message, errType, code string, err error) {
+	if err != nil {
+		log.Printf("[ERROR] %s (%s): %v", code, message, err)
+	}
+	c.JSON(status, gin.H{"error": gin.H{
+		"message": message,
+		"type":    errType,
+		"param":   nil,
+		"code":    code,
+	}})
+}
+
+// writeBadRequest 回一个「请求本身不合法」（400）。err 只进日志，不进响应体。
+func writeBadRequest(c *gin.Context, message, code string, err error) {
+	writeErrorBody(c, http.StatusBadRequest, message, "invalid_request_error", code, err)
+}
+
+// writeInternal 网关自己的失败（读文件、编码这类本地错误，与上游无关）。
+func writeInternal(c *gin.Context, message, code string, err error) {
+	writeErrorBody(c, http.StatusInternalServerError, message, "internal_server_error", code, err)
+}
+
 // writeClientError 把上游/网关判定的失败写成客户端能分辨的 typed 错误。
 // 客户端必须一眼分清「这次请求本身太大」（400 context_length_exceeded）与
 // 「现在按指纹被限速」（429 rate_limit_exceeded）：原先两者都是同一个光秃秃 429，
@@ -59,12 +86,7 @@ func writeClientError(c *gin.Context, t duckgo.UpstreamErrorType) {
 	if status == http.StatusTooManyRequests && c.Writer.Header().Get("Retry-After") == "" {
 		c.Header("Retry-After", "60")
 	}
-	c.JSON(status, gin.H{"error": gin.H{
-		"message": duckgo.ClientErrorMessage(t),
-		"type":    typ,
-		"param":   nil,
-		"code":    code,
-	}})
+	writeErrorBody(c, status, duckgo.ClientErrorMessage(t), typ, code, nil)
 }
 
 // writeUpstreamFailure 处理上游非 200：按错误类型回 typed 状态码与 code。
@@ -80,17 +102,14 @@ func writeUpstreamFailure(c *gin.Context, response *http.Response) {
 
 // writeGatewayError 处理「网关自己判定 / 取挑战失败」的 err。输入超限在打到上游之前
 // 就拒绝，其余沿用 upstreamStatus 的既有语义。
+// 响应里的 message 是稳定文案、err 只进日志：网络错误的原文可能带代理地址。
 func writeGatewayError(c *gin.Context, err error) {
 	if errors.Is(err, duckgo.ErrInputTooLarge) {
 		writeClientError(c, duckgo.ErrTypeInputLimit)
 		return
 	}
 	status := upstreamStatus(c, err)
-	c.JSON(status, gin.H{"error": gin.H{
-		"message": err.Error(),
-		"type":    "upstream_error",
-		"code":    "upstream_failure",
-	}})
+	writeErrorBody(c, status, duckgo.GatewayErrorMessage(err), "upstream_error", "upstream_failure", err)
 }
 
 func optionsHandler(c *gin.Context) {
@@ -107,17 +126,16 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 	var original_request officialtypes.APIRequest
 	err := c.BindJSON(&original_request)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
-		}})
+		writeBadRequest(c, "Request must be proper JSON", "invalid_json", err)
 		return
 	}
 
-	// Resolve thinking effort: request field takes precedence, then CLAUDE_CODE_EFFORT_LEVEL env.
+	// Resolve thinking effort: 扁平字段 > 嵌套 reasoning.effort > 环境变量。
+	// 嵌套那份是 Hermes/codex 系客户端唯一会发的形状（见 APIRequest.Reasoning）。
 	effort := original_request.ReasoningEffort
+	if effort == "" {
+		effort = original_request.Reasoning.EffortOrEmpty()
+	}
 	if effort == "" {
 		effort = os.Getenv("CLAUDE_CODE_EFFORT_LEVEL")
 		original_request.ReasoningEffort = effort
@@ -172,7 +190,7 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 				int64(inputTokens), int64(result.OutputTokens), result.TTFTMs, result.TotalMs))
 			return
 		}
-		c.JSON(200, officialtypes.NewChatCompletionFull(
+		completed := officialtypes.NewChatCompletionFull(
 			result.Text,
 			translated_request.Model,
 			int64(inputTokens),
@@ -181,7 +199,9 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 			result.TTFTMs,
 			result.TotalMs,
 			effort,
-		))
+		)
+		completed.Choices[0].Message.ReasoningContent = result.Reasoning
+		c.JSON(200, completed)
 	} else {
 		c.String(200, "data: [DONE]\n\n")
 	}
@@ -214,17 +234,15 @@ func (h *Handler) responses(c *gin.Context) {
 	var responseRequest officialtypes.ResponseAPIRequest
 	err := c.BindJSON(&responseRequest)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
-		}})
+		writeBadRequest(c, "Request must be proper JSON", "invalid_json", err)
 		return
 	}
 
-	// Resolve thinking effort: request field takes precedence, then CLAUDE_CODE_EFFORT_LEVEL env.
+	// Resolve thinking effort: 扁平字段 > 嵌套 reasoning.effort > 环境变量（同 chat 路）。
 	effort := responseRequest.ReasoningEffort
+	if effort == "" {
+		effort = responseRequest.Reasoning.EffortOrEmpty()
+	}
 	if effort == "" {
 		effort = os.Getenv("CLAUDE_CODE_EFFORT_LEVEL")
 		responseRequest.ReasoningEffort = effort
@@ -293,6 +311,7 @@ func (h *Handler) responses(c *gin.Context) {
 		completed.Output = duckgo.ResponsesToolCalls(result.ToolCalls, stats.CustomTools)
 		completed.OutputText = ""
 	}
+	completed.PrependReasoning(result.Reasoning)
 	c.JSON(http.StatusOK, completed)
 }
 
@@ -370,6 +389,23 @@ func handleResponsesStream(c *gin.Context, body io.ReadCloser, model string, sta
 	gate := duckgo.NewStreamGate(stats.Tools)
 	output := officialtypes.NewResponseOutput("")
 	output.Status = "in_progress"
+	// 思维项（若出现）一定排在正文之前，占 output_index 0，正文顺势挪到 1。
+	// reasoning 帧不经过 gate：闸门判的是正文里的工具标记。
+	msgIndex := 0
+	var reasoning strings.Builder
+	reasoningItem := officialtypes.NewResponseReasoning("")
+	reasoningStarted := false
+	startReasoningItem := func() {
+		if reasoningStarted {
+			return
+		}
+		reasoningStarted = true
+		msgIndex = 1
+		item := reasoningItem
+		item.Status = "in_progress"
+		item.Summary = nil
+		writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.added", Sequence: 2, OutputIndex: 0, Item: &item})
+	}
 	part := officialtypes.ResponseOutputContent{
 		Type:        "output_text",
 		Text:        "",
@@ -382,9 +418,9 @@ func handleResponsesStream(c *gin.Context, body io.ReadCloser, model string, sta
 		}
 		started = true
 		// response.output_item.added
-		writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.added", Sequence: 2, OutputIndex: 0, Item: &output})
+		writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.added", Sequence: 2, OutputIndex: msgIndex, Item: &output})
 		// response.content_part.added
-		writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.content_part.added", Sequence: 3, ItemID: output.ID, OutputIndex: 0, ContentIndex: 0, Part: part})
+		writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.content_part.added", Sequence: 3, ItemID: output.ID, OutputIndex: msgIndex, ContentIndex: 0, Part: part})
 	}
 
 	var sb strings.Builder
@@ -407,23 +443,39 @@ func handleResponsesStream(c *gin.Context, body io.ReadCloser, model string, sta
 			continue
 		}
 
-		var delta struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(line), &delta); err != nil {
+		var frame duckgotypes.ApiResponse
+		if err := json.Unmarshal([]byte(line), &frame); err != nil {
 			continue
 		}
-		if delta.Message == "" {
+		// 思维增量（role=reasoning）：走 reasoning 通道，不写进正文 sb，
+		// 也不进 gate —— 否则思考文本里的花括号会被当成工具调用。
+		if frame.Role == "reasoning" {
+			if frame.Text == "" {
+				continue
+			}
+			startReasoningItem()
+			reasoning.WriteString(frame.Text)
+			writeRespEvent(c, officialtypes.ResponseStreamEvent{
+				Type:         "response.reasoning_summary_text.delta",
+				Sequence:     0,
+				ItemID:       reasoningItem.ID,
+				OutputIndex:  0,
+				SummaryIndex: 0,
+				Delta:        frame.Text,
+			})
+			continue
+		}
+		if frame.Message == "" {
 			continue
 		}
 
-		sb.WriteString(delta.Message)
+		sb.WriteString(frame.Message)
 		if !firstTokenSet {
 			firstTokenSet = true
 			ttftMs = time.Since(stats.Start).Milliseconds()
 		}
 
-		emit, hold := gate.Push(delta.Message)
+		emit, hold := gate.Push(frame.Message)
 		if hold || emit == "" {
 			continue
 		}
@@ -433,7 +485,7 @@ func handleResponsesStream(c *gin.Context, body io.ReadCloser, model string, sta
 			Type:         "response.output_text.delta",
 			Sequence:     0,
 			ItemID:       output.ID,
-			OutputIndex:  0,
+			OutputIndex:  msgIndex,
 			ContentIndex: 0,
 			Delta:        emit,
 		})
@@ -443,6 +495,13 @@ func handleResponsesStream(c *gin.Context, body io.ReadCloser, model string, sta
 	outputTokens := util.CountToken(fullText)
 	totalMs := time.Since(stats.Start).Milliseconds()
 
+	// 思维项收尾：增量已即时下发，这里补一个带 summary 的 done，
+	// 客户端（含 Hermes）靠这个 item 把整段思考留在本轮记录里。
+	if reasoningStarted {
+		reasoningItem = officialtypes.NewResponseReasoning(reasoning.String())
+		writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.done", Sequence: 0, OutputIndex: 0, Item: &reasoningItem})
+	}
+
 	// 模型要调工具: output 换成 function_call 项, 不分片整块发(与 chat 路径同一取舍)。
 	var toolCalls []duckgo.ToolCall
 	if gate.Holding() {
@@ -451,7 +510,13 @@ func handleResponsesStream(c *gin.Context, body io.ReadCloser, model string, sta
 	if len(toolCalls) > 0 {
 		completed := officialtypes.NewResponseAPIFull("", model, int64(stats.PromptTokens), int64(outputTokens), int64(stats.CachedTokens), ttftMs, totalMs, stats.Effort)
 		completed.Output = duckgo.ResponsesToolCalls(toolCalls, stats.CustomTools)
-		for i := range completed.Output {
+		completed.PrependReasoning(reasoning.String())
+		// 思维项的 added/done 已经在上面发过了，别重发（重复的 item 事件会让客户端算错项数）。
+		first := 0
+		if reasoningStarted {
+			first = 1
+		}
+		for i := first; i < len(completed.Output); i++ {
 			writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.added", Sequence: 0, OutputIndex: i, Item: &completed.Output[i]})
 			writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.done", Sequence: 0, OutputIndex: i, Item: &completed.Output[i]})
 		}
@@ -472,7 +537,7 @@ func handleResponsesStream(c *gin.Context, body io.ReadCloser, model string, sta
 			Type:         "response.output_text.delta",
 			Sequence:     0,
 			ItemID:       output.ID,
-			OutputIndex:  0,
+			OutputIndex:  msgIndex,
 			ContentIndex: 0,
 			Delta:        gate.Buffered(),
 		})
@@ -484,13 +549,14 @@ func handleResponsesStream(c *gin.Context, body io.ReadCloser, model string, sta
 		Annotations: []interface{}{},
 	}
 	completed := officialtypes.NewResponseAPIFull(fullText, model, int64(stats.PromptTokens), int64(outputTokens), int64(stats.CachedTokens), ttftMs, totalMs, stats.Effort)
+	completed.PrependReasoning(reasoning.String())
 
 	// response.output_text.done
-	writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_text.done", Sequence: 0, ItemID: output.ID, OutputIndex: 0, ContentIndex: 0, Text: fullText})
+	writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_text.done", Sequence: 0, ItemID: output.ID, OutputIndex: msgIndex, ContentIndex: 0, Text: fullText})
 	// response.content_part.done
-	writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.content_part.done", Sequence: 0, ItemID: output.ID, OutputIndex: 0, ContentIndex: 0, Part: donePart})
+	writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.content_part.done", Sequence: 0, ItemID: output.ID, OutputIndex: msgIndex, ContentIndex: 0, Part: donePart})
 	// response.output_item.done
-	writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.done", Sequence: 0, OutputIndex: 0, Item: &completed.Output[0]})
+	writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.done", Sequence: 0, OutputIndex: msgIndex, Item: &completed.Output[msgIndex]})
 	// response.completed
 	writeRespEvent(c, officialtypes.ResponseStreamEvent{Type: "response.completed", Sequence: 0, Response: &completed})
 	c.Writer.Flush()
@@ -513,12 +579,7 @@ func writeRespEvent(c *gin.Context, event officialtypes.ResponseStreamEvent) {
 func (h *Handler) imageGenerations(c *gin.Context) {
 	var req officialtypes.ImageGenerationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
-		}})
+		writeBadRequest(c, "Request must be proper JSON", "invalid_json", err)
 		return
 	}
 
@@ -563,31 +624,21 @@ func (h *Handler) imageGenerations(c *gin.Context) {
 	client := resty.NewStdClient()
 	token, err := duckgo.InitXVQD(client, ident.Proxy, ident.UA)
 	if err != nil {
-		c.JSON(upstreamStatus(c, err), gin.H{"error": gin.H{
-			"message": "Failed to initialize VQD token",
-			"type":    "internal_server_error",
-			"code":    err.Error(),
-		}})
+		writeGatewayError(c, err)
 		return
 	}
 
 	response, err := duckgo.POSTconversation(client, translatedRequest, token, ident.Proxy, ident.UA)
 	if err != nil {
-		c.JSON(500, gin.H{"error": gin.H{
-			"message": "Failed to generate image",
-			"type":    "internal_server_error",
-			"code":    err.Error(),
-		}})
+		writeGatewayError(c, err)
 		return
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != 200 {
-		c.JSON(response.StatusCode, gin.H{"error": gin.H{
-			"message": duckgo.ReadResponseError(response).Error(),
-			"type":    "api_error",
-			"code":    "upstream_error",
-		}})
+		// 这条路原先手搓 418/429 + 上游原文，实测把 overrideCode:3e06、r:<uuid> 漏给了客户端，
+		// 而同一个 ERR_BN_LIMIT 走 chat 路径会变成干净的 503 egress_blocked。
+		writeUpstreamFailure(c, response)
 		return
 	}
 
@@ -640,12 +691,8 @@ func (h *Handler) imageEdits(c *gin.Context) {
 		// Try JSON body for base64 input
 		var req officialtypes.ImageEditRequest
 		if jsonErr := c.ShouldBindJSON(&req); jsonErr != nil {
-			c.JSON(400, gin.H{"error": gin.H{
-				"message": "Request must be multipart form or proper JSON",
-				"type":    "invalid_request_error",
-				"param":   nil,
-				"code":    err.Error(),
-			}})
+			// 之前这里回的是 err（ParseMultipartForm 的错误），把真正的 JSON 解析错误丢了。
+			writeBadRequest(c, "Request must be multipart form or proper JSON", "invalid_json", jsonErr)
 			return
 		}
 		h.handleImageEditJSON(c, req)
@@ -679,11 +726,7 @@ func (h *Handler) imageEdits(c *gin.Context) {
 
 	imageBytes, err := io.ReadAll(file)
 	if err != nil {
-		c.JSON(500, gin.H{"error": gin.H{
-			"message": "Failed to read image file",
-			"type":    "internal_server_error",
-			"code":    err.Error(),
-		}})
+		writeInternal(c, "Failed to read image file", "read_failed", err)
 		return
 	}
 
@@ -768,31 +811,19 @@ func (h *Handler) doImageEdit(c *gin.Context, prompt string, imageB64 string) {
 	client := resty.NewStdClient()
 	token, err := duckgo.InitXVQD(client, ident.Proxy, ident.UA)
 	if err != nil {
-		c.JSON(upstreamStatus(c, err), gin.H{"error": gin.H{
-			"message": "Failed to initialize VQD token",
-			"type":    "internal_server_error",
-			"code":    err.Error(),
-		}})
+		writeGatewayError(c, err)
 		return
 	}
 
 	response, err := duckgo.POSTconversation(client, nativeReq, token, ident.Proxy, ident.UA)
 	if err != nil {
-		c.JSON(500, gin.H{"error": gin.H{
-			"message": "Failed to edit image",
-			"type":    "internal_server_error",
-			"code":    err.Error(),
-		}})
+		writeGatewayError(c, err)
 		return
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != 200 {
-		c.JSON(response.StatusCode, gin.H{"error": gin.H{
-			"message": duckgo.ReadResponseError(response).Error(),
-			"type":    "api_error",
-			"code":    "upstream_error",
-		}})
+		writeUpstreamFailure(c, response)
 		return
 	}
 
@@ -831,11 +862,7 @@ func (h *Handler) doImageEdit(c *gin.Context, prompt string, imageB64 string) {
 func (h *Handler) engines(c *gin.Context) {
 	models, statusCode, err := fetchDuckDuckGoModels(h.proxy.GetIdentity())
 	if err != nil {
-		c.JSON(statusCode, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "upstream_error",
-			"code":    "models_fetch_failed",
-		}})
+		writeErrorBody(c, statusCode, duckgo.GatewayErrorMessage(err), "upstream_error", "models_fetch_failed", err)
 		return
 	}
 

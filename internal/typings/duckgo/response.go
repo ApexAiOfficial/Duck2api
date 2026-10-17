@@ -32,6 +32,8 @@ type ApiResponse struct {
 	Name       string `json:"name,omitempty"`
 	ToolName   string `json:"toolName,omitempty"`
 	ToolCallId string `json:"toolCallId,omitempty"`
+	// Text 是 role=="reasoning" 帧的思维增量（state=="text-delta"）。
+	Text string `json:"text,omitempty"`
 	// ToolArguments 是上游工具调用的入参原文（JSON 字符串）。出图时里面是
 	// {"imageGenPrompt":"..."}——即 duck.ai 转手喂给图像服务（gpt-image-2）的真实提示词，
 	// 用户给的原始 prompt 会被上游改写后再送进去。抓它才拿得到"实际画的那句话"。

@@ -39,11 +39,7 @@ type ICEServerResponse struct {
 func (h *Handler) audioSpeech(c *gin.Context) {
 	var req SpeechRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"code":    err.Error(),
-		}})
+		writeBadRequest(c, "Request must be proper JSON", "invalid_json", err)
 		return
 	}
 
@@ -70,11 +66,7 @@ func (h *Handler) audioSpeech(c *gin.Context) {
 
 	audioData, err := h.generateSpeechWebRTC(req.Input, req.Voice)
 	if err != nil {
-		log.Printf("[TTS] Error: %v", err)
-		c.JSON(upstreamStatus(c, err), gin.H{"error": gin.H{
-			"message": fmt.Sprintf("TTS failed: %v", err),
-			"type":    "internal_server_error",
-		}})
+		writeGatewayError(c, err)
 		return
 	}
 

@@ -149,34 +149,6 @@ func POSTconversation(client httpclient.AuroraHttpClient, request duckgotypes.Ap
 	return response, nil
 }
 
-func Handle_request_error(c *gin.Context, response *http.Response) bool {
-	if response.StatusCode != 200 {
-		// Try read response body as JSON
-		var error_response map[string]interface{}
-		err := json.NewDecoder(response.Body).Decode(&error_response)
-		if err != nil {
-			// Read response body
-			body, _ := io.ReadAll(response.Body)
-			c.JSON(response.StatusCode, gin.H{"error": gin.H{
-				"message": "Unknown error",
-				"type":    "internal_server_error",
-				"param":   nil,
-				"code":    "500",
-				"details": string(body),
-			}})
-			return true
-		}
-		c.JSON(response.StatusCode, gin.H{"error": gin.H{
-			"message": error_response["detail"],
-			"type":    response.Status,
-			"param":   nil,
-			"code":    "error",
-		}})
-		return true
-	}
-	return false
-}
-
 func createHeader(ua string) httpclient.AuroraHeaders {
 	header := make(httpclient.AuroraHeaders)
 	header.Set("accept-language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
@@ -376,7 +348,9 @@ func CustomToolSet(names []string) map[string]bool {
 
 // StreamResult is what Handler returns: the full text plus output-side telemetry.
 type StreamResult struct {
-	Text         string
+	Text string
+	// Reasoning 是思维全文（上游 role=reasoning 的增量拼起来）；上游没思考时为空。
+	Reasoning    string
 	ToolCalls    []ToolCall
 	OutputTokens int
 	TTFTMs       int64
@@ -394,6 +368,7 @@ func Handler(c *gin.Context, response *http.Response, oldRequest duckgotypes.Api
 	}
 
 	var previousText strings.Builder
+	var reasoningText strings.Builder
 	var firstTokenSet bool
 	var ttftMs int64
 	gate := NewStreamGate(stats.Tools)
@@ -419,6 +394,24 @@ func Handler(c *gin.Context, response *http.Response, oldRequest duckgotypes.Api
 			if originalResponse.Action != "success" {
 				c.JSON(500, gin.H{"error": "Error"})
 				return StreamResult{}
+			}
+			// 思维帧独立成流（role=reasoning, state=text-delta, text 增量）。上游会先推 100+ 帧
+			// 思考再推正文，此前一律被当"空 message"丢掉。不过 StreamGate：闸门判的是正文里的
+			// 工具标记，思维混进去会把判定污染成误报工具调用。
+			// 只透 text：summaryText 是同一段思考的摘要（会重复），encryptedText 回放不了。
+			if originalResponse.Role == "reasoning" {
+				if originalResponse.Text == "" {
+					continue
+				}
+				reasoningText.WriteString(originalResponse.Text)
+				if stream {
+					chunk := officialtypes.NewReasoningChunkWithModel(originalResponse.Text, originalResponse.Model)
+					if _, err := c.Writer.WriteString("data: " + chunk.String() + "\n\n"); err != nil {
+						return StreamResult{}
+					}
+					c.Writer.Flush()
+				}
+				continue
 			}
 			responseString := ""
 			if originalResponse.Message != "" {
@@ -490,6 +483,7 @@ func Handler(c *gin.Context, response *http.Response, oldRequest duckgotypes.Api
 
 	return StreamResult{
 		Text:         fullText,
+		Reasoning:    reasoningText.String(),
 		ToolCalls:    toolCalls,
 		OutputTokens: outputTokens,
 		TTFTMs:       ttftMs,

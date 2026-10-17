@@ -235,6 +235,8 @@ curl http://localhost:8080/v1/audio/speech \
 
 上游单请求上限实测 ≈4k token（19,017 字符通过、20,017 字符被拒 `ERR_INPUT_LIMIT`），且是**确定性**的：完全空闲 12 分钟后的单发 36,000 字符仍然被拒。没这个守卫时客户端要白等约 67s 才拿到一个分不清原因的 429。
 
+请求体本身另有一道硬上限 **64MB**（`middlewares.BodyLimit`，全局，早于鉴权）。取 64MB 是因为出图/改图走 base64（体积膨胀 1/3），而上传侧 `ParseMultipartForm(32<<20)` 里的 32MB 只是「留在内存的阈值」、超出部分落盘，本身不构成上限。超限的请求会在进 handler 之前被截断，各 handler 现有的 400/500 分支照常接住。
+
 ### 工具调用（函数调用）
 
 上游 duck.ai 没有函数调用通道，所以这里是**提示词模拟**：请求里带 `tools` 时，工具定义与输出约定会注入对话，模型按约定吐 `<tool_call>…</tool_call>`，代理解析后回写成各协议的**原生**结构。
@@ -300,11 +302,17 @@ socks5://proxy3:1080
 
 - **UA 基本是自由字段。** 实测 12/12 全过：Windows Chrome 131/145、Edge、Android、**Safari
   （连 Chrome 版本都没有）**、Chrome **100** 与 **160**、Ubuntu/Fedora 的 Linux 串。所以按
-  `平台 × Chrome 版本`（7 × 39）生成，指纹用不完。
+  `平台 × Chrome 版本`（7 × 32）生成，指纹用不完。版本上界按真机存在的版本收（当前 151）——
+  报一个尚未发布的版本是最容易看出来的假 UA。
 - 真正会被拒的是**客户端提示与 UA 自相矛盾**那一类。旧代码把 `sec-ch-ua-platform` 写死
   `"Linux"`，于是 Windows UA 一律 418 —— 当时被误读成「Windows UA 不被接受」（连 macOS 也被
   无谓排除）。现在客户端提示由 UA 反推（`chromeHints`），Windows 直接过。**别再加第二张常量表**，
-  两份来源迟早打架。
+  两份来源迟早打架。同一个道理的还有挑战环境里的 `navigator.platform`（原先写死 `"Win32"`）、
+  `appVersion`，现在都从 UA 派生。
+- **`sec-ch-ua` 的 grease 品牌与品牌顺序是算出来的**，照抄 Chromium 的
+  `GenerateBrandVersionList`（`"Not"+chars[v%11]+"A"+chars[(v+1)%11]+"Brand"`，版本取
+  `{8,99,24}[v%3]`，顺序按 `v%6` 洗牌）。写死的 `"Not:A;Brand";v="24"` 对多数版本都是错的
+  （145 真值是 `"Not:A-Brand";v="99"`），等于所有出口共用一个编造的常量。
 - **没有代理（直连）时每次启动生成一个新指纹**。要固定就设 `X_USER_AGENT`。
 - 启动时打 `identity` 日志行，换没换指纹看得见。
 

@@ -128,8 +128,10 @@ func executeVQDHashScript(jsCode string, ua string) (string, error) {
 }
 
 func installVQDHelpers(vm *goja.Runtime, ua string) error {
+	_, navPlatform := platformFor(ua)
 	helpers := map[string]interface{}{
 		"__goUserAgent":    ua,
+		"__goNavPlatform":  navPlatform,
 		"__goOrigin":       vqdOrigin(),
 		"__goStack":        vqdStack(),
 		"__goSha256Base64": goSha256Base64,
@@ -247,9 +249,13 @@ const vqdBrowserPrelude = `
   };
 
   // ===== Navigator =====
+  // platform / appVersion 从传进来的 UA 派生（ua.go 的 platformFor），不写死：真 Chrome 在
+  // Linux 上 navigator.platform 是 "Linux x86_64"、macOS 是 "MacIntel"，写死 "Win32" 就
+  // 和 UA、sec-ch-ua-platform 三方打架 —— 这正是当初 418 ERR_CHALLENGE 的成因那一类。
+  // 实测这个字段不参与服务端校验（改前 12/12 通过），改它属于保真度，但必须真上游重跑验证。
   var navigator__ = {
     userAgent: userAgent__,
-    platform: "Win32",
+    platform: __goNavPlatform,
     language: "en-US",
     languages: ["en-US", "en"],
     cookieEnabled: true,
@@ -261,7 +267,7 @@ const vqdBrowserPrelude = `
     productSub: "20030107",
     appCodeName: "Mozilla",
     appName: "Netscape",
-    appVersion: userAgent__,
+    appVersion: userAgent__.replace(/^Mozilla\//, ""),
     product: "Gecko",
     doNotTrack: null,
     mimeTypes: { length: 0, item: function () { return null; }, namedItem: function () { return null; } },

@@ -90,6 +90,15 @@ func ClientError(t UpstreamErrorType) (int, string, string) {
 	return http.StatusInternalServerError, "upstream_error", "upstream_failure"
 }
 
+// GatewayErrorMessage 给「网关自己失败」的稳定文案。err 只用来分辨已知哨兵错误，
+// 原文不进响应体（网络错误的原文可能带代理地址与内部主机名）。
+func GatewayErrorMessage(err error) string {
+	if errors.Is(err, ErrChallengeUnavailable) {
+		return ClientErrorMessage(ErrTypeChallenge)
+	}
+	return ClientErrorMessage(ErrTypeUnknown)
+}
+
 // ClientErrorMessage 给客户端看的稳定文案：不复述上游原文（内含 r 事件号与站点内部
 // 字段），细节留在日志里。
 func ClientErrorMessage(t UpstreamErrorType) string {

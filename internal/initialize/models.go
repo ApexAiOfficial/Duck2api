@@ -81,7 +81,7 @@ func parseDuckDuckGoModels(body []byte, created int64) (openAIModelsResponse, er
 		Data:   make([]openAIModel, 0, len(upstream.Models)+1),
 	}
 	for _, model := range upstream.Models {
-		if model.ID == "" {
+		if model.ID == "" || unavailableModelIDs[model.ID] {
 			continue
 		}
 		result.Data = append(result.Data, openAIModel{
@@ -112,6 +112,18 @@ func parseDuckDuckGoModels(body []byte, created int64) (openAIModelsResponse, er
 
 // hiddenModelID: DuckDuckGo 前端 bundle 里有、但 /duckchat/v1/models 不返回的可用模型。
 const hiddenModelID = "gpt-6-luna"
+
+// unavailableModelIDs: 上游列表里挂着、但实测请求必败的 id。留着它只会让客户端选到，
+// 然后拿到一个无法分类的 500 —— 上游错误体里没有任何可归类的 type，落到 errors.go 的兜底。
+// 实测（2026-10-08/09/10 各一次）tinfoil/gpt-oss-120b 每次都 500 upstream_failure、~4s，
+// 跨天确定性复现。上游哪天修好了就把这行删掉。
+//
+// 只滤这一个：另外 5 个匿名无权限的模型（gpt-5.6-terra / gpt-5.6-sol / claude-sonnet-4-6 /
+// claude-opus-4-8 / mistral-small-2603）回的是 typed 400 model_not_available，原因明确、
+// 也可能哪天开权限，不该藏。
+var unavailableModelIDs = map[string]bool{
+	"tinfoil/gpt-oss-120b": true,
+}
 
 // 上游列表里没有、但本网关实测可请求的模型。客户端靠 /v1/models 枚举，不在这里列出就点不到。
 var hiddenModels = []struct{ id, ownedBy string }{

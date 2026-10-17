@@ -61,3 +61,22 @@ func TestParseDuckDuckGoModelsRejectsInvalidJSON(t *testing.T) {
 		t.Fatal("expected invalid JSON error")
 	}
 }
+
+// 黑名单里的 id 不能出现在枚举里，而还能用的 gpt-5.6-luna 必须留着（它是工具出图的默认载体）。
+func TestUnavailableModelsAreFiltered(t *testing.T) {
+	body := []byte(`{"models":[{"id":"gpt-5.6-terra","provider":"openai"},{"id":"gpt-5.6-sol","provider":"openai"},` +
+		`{"id":"gpt-5.6-luna","provider":"openai"},{"id":"tinfoil/gpt-oss-120b","provider":"tinfoil"}]}`)
+
+	result, err := parseDuckDuckGoModels(body, 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id := range unavailableModelIDs {
+		if hasModelID(result.Data, id) {
+			t.Errorf("黑名单里的 %q 仍出现在列表里: %+v", id, result.Data)
+		}
+	}
+	if !hasModelID(result.Data, duckgo.ToolImageChatModel) {
+		t.Errorf("工具出图载体 %q 被误删，出图能力会跟着消失", duckgo.ToolImageChatModel)
+	}
+}

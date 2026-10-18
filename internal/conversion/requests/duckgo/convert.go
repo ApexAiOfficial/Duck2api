@@ -173,7 +173,7 @@ func ConvertAPIRequestWithOptions(apiRequest officialtypes.APIRequest, reasoning
 
 // maxToolResultTokens 单条工具结果的预算。超过就头尾截断：agent 循环里
 // git show / cat 的输出几万字符，不截断会让整包顶穿上游上限（→ 摘要 → 504 → 无限重试）。
-const maxToolResultTokens = 4000
+const maxToolResultTokens = 1500
 
 // FileStore is a function to look up file content by ID
 // Set this from the handler to enable file resolution

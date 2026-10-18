@@ -3,6 +3,7 @@ package initialize
 import (
 	duckgoConvert "aurora/internal/conversion/requests/duckgo"
 	"aurora/internal/duckgo"
+	"aurora/internal/httpclient"
 	"aurora/internal/httpclient/resty"
 	"aurora/internal/middlewares"
 	"aurora/internal/proxys"
@@ -321,6 +322,24 @@ func (h *Handler) responses(c *gin.Context) {
 	c.JSON(http.StatusOK, completed)
 }
 
+// summarizer 给会话压缩用：拿一段旧历史，回一段摘要。共用本次请求的 client/token/身份，
+// 代价是超限请求多打一次上游（延迟翻倍、多消耗一格挑战额度），所以只在真超限时调用。
+func (h *Handler) summarizer(client httpclient.AuroraHttpClient, token string, ident proxys.Identity, model string) duckgoConvert.SummarizeFunc {
+	return func(text string) (string, error) {
+		req := duckgotypes.NewApiRequest(model)
+		req.AddMessage("user", "把下面这段对话历史压成不超过 400 字的摘要，只保留对后续对话有用的事实、决定和未完成事项；不要评论、不要复述这段指令。\n\n"+text)
+		resp, err := duckgo.POSTconversation(client, req, token, ident.Proxy, ident.UA)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("summarize: %s", resp.Status)
+		}
+		return duckgo.ReadResponseText(resp), nil
+	}
+}
+
 func (h *Handler) startDuckDuckGoRequest(originalRequest officialtypes.APIRequest) (duckgotypes.ApiRequest, *http.Response, error) {
 	ident := h.proxy.GetIdentity()
 	client := resty.NewStdClient()
@@ -334,8 +353,16 @@ func (h *Handler) startDuckDuckGoRequest(originalRequest officialtypes.APIReques
 
 	translatedRequest := duckgoConvert.ConvertAPIRequestWithOptions(originalRequest, reasoningEffort, webSearch)
 
-	// 上游单请求上限是硬的（≈4k token，见 fit.go）：在这里一次把三条入站路（chat /
-	// responses / messages）都管住，别让请求白白打到上游再吃一个 67s 的 429。
+	// 上游单请求上限是硬的（实测按字符计 ≈19,500，见 fit.go）。超限时先试「压缩」：
+	// 把最老的一段历史换成摘要（Hermes 那套），这样客户端能继续跑长会话而不失忆。
+	// 压不动才退回原来的「丢旧历史」，仍装不下再报 typed 400。
+	if total, _ := duckgoConvert.TokenBudget(&translatedRequest); total > duckgoConvert.MaxInputTokens() {
+		summarize := h.summarizer(client, token, ident, translatedRequest.Model)
+		if dropped, rounds, fits := duckgoConvert.CompressToFit(&translatedRequest, summarize); dropped > 0 {
+			log.Printf("[COMPRESS] 压了 %d 条 / %d 轮，装得下=%v", dropped, rounds, fits)
+		}
+	}
+
 	// 计数与丢弃明细由 fit.go 自己落日志。
 	if _, ok := duckgoConvert.FitToUpstreamLimit(&translatedRequest); !ok {
 		return duckgotypes.ApiRequest{}, nil, duckgo.ErrInputTooLarge

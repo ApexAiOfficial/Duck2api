@@ -159,6 +159,24 @@ func (a *ApiRequest) MessageText(i int) string {
 	return a.Messages[i].Content.CountableText()
 }
 
+// InsertMessageAt 在第 i 条之前插入一条消息（i 越界时追加）。
+func (a *ApiRequest) InsertMessageAt(i int, role string, content string) {
+	a.Messages = append(a.Messages, messages{})
+	if i < 0 || i > len(a.Messages)-1 {
+		a.Messages[len(a.Messages)-1] = newTextMessage(role, content)
+		return
+	}
+	copy(a.Messages[i+1:], a.Messages[i:])
+	a.Messages[i] = newTextMessage(role, content)
+}
+
+func newTextMessage(role string, content string) messages {
+	return messages{
+		Role:    role,
+		Content: MessageContent{Parts: []ContentPart{{Type: "text", Text: content}}},
+	}
+}
+
 // DropMessage 删掉第 i 条消息；越界是空操作。
 func (a *ApiRequest) DropMessage(i int) {
 	if i < 0 || i >= len(a.Messages) {

@@ -180,7 +180,15 @@ func ParseToolCalls(text string) []ToolCall {
 		if end < 0 {
 			return calls
 		}
-		body := strings.TrimSpace(text[start+len(toolCallOpen) : start+end])
+		// 模型常把不可见的方向控制符（U+2068/U+2069 等）混进 JSON：TrimSpace 去不掉，
+		// json.Unmarshal 直接失败 → 整条调用被当普通正文漏给客户端，agent 循环就断了。
+		body := strings.TrimSpace(strings.Map(func(r rune) rune {
+			switch r {
+			case '\u2068', '\u2069', '\u200e', '\u200f', '\ufeff':
+				return -1
+			}
+			return r
+		}, text[start+len(toolCallOpen):start+end]))
 		text = text[start+end+len(toolCallClose):]
 
 		var raw struct {

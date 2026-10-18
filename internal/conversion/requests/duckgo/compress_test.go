@@ -174,3 +174,20 @@ func TestCompressLeavesMediaMessageAlone(t *testing.T) {
 		t.Error("带图片的消息不该被摘要替换")
 	}
 }
+
+// 摘要不听话（返回远超 400 字）时必须按预算收口，否则「压过了」仍然超限 —— 生产上真踩到的
+// 就是这条：本地摘要短、生产摘要胖，同样代码一个 200 一个 400。
+func TestCompressShrinksFatSummary(t *testing.T) {
+	ResetSummaryCache()
+	t.Setenv("MAX_INPUT_TOKENS", "1200")
+	req := duckgotypes.NewApiRequest("gpt-5.6-luna")
+	req.AddMessage("user", strings.Repeat("大文件内容。", 3000))
+
+	_, _, fits := CompressToFit(&req, func(string) (string, error) {
+		return strings.Repeat("摘要条目。", 500), nil // 远超标称的 400 字
+	})
+	total, _ := TokenBudget(&req)
+	if !fits || total > 1200 {
+		t.Fatalf("胖摘要没被收口: total=%d fits=%v", total, fits)
+	}
+}

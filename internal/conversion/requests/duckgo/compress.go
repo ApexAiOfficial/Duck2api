@@ -121,7 +121,13 @@ func shrinkOversized(req *duckgotypes.ApiRequest, summarize SummarizeFunc, limit
 		if i == req.MessageCount()-1 {
 			out += "\n\n【原消息开头】\n" + leadingText(text, limit/8)
 		}
-		req.SetMessageText(i, summaryPrefix+out)
+		repl := summaryPrefix + out
+		// 摘要由模型产出，长度不能假设：上游连 400 字都可能不听话（实测生产上摘要仍
+		// 太胖 → 压完照样超限 → 400）。这里按预算收口，保证替换结果一定装得下。
+		if util.CountToken(repl) > target {
+			repl = summaryPrefix + headTail(repl, target)
+		}
+		req.SetMessageText(i, repl)
 		changed++
 	}
 	return changed

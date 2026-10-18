@@ -136,7 +136,10 @@ func ConvertAPIRequestWithOptions(apiRequest officialtypes.APIRequest, reasoning
 			// 放在 developer 消息里); 不认就会整段提示静默消失。
 			role = "user"
 			if message.Role == "tool" {
-				content = "[工具结果] " + contentText(content)
+				// 工具结果长度不可控（git show、cat 大文件都是几万字符）：不截断时
+				// 单条就把整包顶过上游上限，触发摘要 → 撞边缘超时 504，agent 收不到
+				// 结果只会重试同一个调用。头尾各留一段，够它判断，也留足预算。
+				content = "[工具结果] " + headTail(contentText(content), maxToolResultTokens)
 			}
 		case "assistant":
 			for _, call := range message.ToolCalls {
@@ -167,6 +170,10 @@ func ConvertAPIRequestWithOptions(apiRequest officialtypes.APIRequest, reasoning
 	duckgoRequest.DurableStream = &ds
 	return duckgoRequest
 }
+
+// maxToolResultTokens 单条工具结果的预算。超过就头尾截断：agent 循环里
+// git show / cat 的输出几万字符，不截断会让整包顶穿上游上限（→ 摘要 → 504 → 无限重试）。
+const maxToolResultTokens = 4000
 
 // FileStore is a function to look up file content by ID
 // Set this from the handler to enable file resolution

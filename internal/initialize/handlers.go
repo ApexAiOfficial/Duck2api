@@ -356,7 +356,7 @@ func (h *Handler) startDuckDuckGoRequest(originalRequest officialtypes.APIReques
 	// 上游单请求上限是硬的（实测按字符计 ≈19,500，见 fit.go）。超限时先试「压缩」：
 	// 把最老的一段历史换成摘要（Hermes 那套），这样客户端能继续跑长会话而不失忆。
 	// 压不动才退回原来的「丢旧历史」，仍装不下再报 typed 400。
-	if total, _ := duckgoConvert.TokenBudget(&translatedRequest); total > duckgoConvert.MaxInputTokens() {
+	if total, _ := duckgoConvert.TokenBudget(&translatedRequest); duckgoConvert.OverInputLimit(&translatedRequest, total) {
 		summarize := h.summarizer(client, token, ident, translatedRequest.Model)
 		if dropped, rounds, fits := duckgoConvert.CompressToFit(&translatedRequest, summarize); dropped > 0 {
 			log.Printf("[COMPRESS] 压了 %d 条 / %d 轮，装得下=%v", dropped, rounds, fits)

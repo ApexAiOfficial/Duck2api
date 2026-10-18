@@ -191,3 +191,40 @@ func TestCompressShrinksFatSummary(t *testing.T) {
 		t.Fatalf("胖摘要没被收口: total=%d fits=%v", total, fits)
 	}
 }
+
+// 字符维度：20k ASCII 字符只值 4004 tiktoken（在默认 7500 之下），但上游按字符算已经超限。
+// 只守 token 会把这段「真空区」原样送给上游，换回 400 context_length_exceeded —— 生产上
+// 20k 字符稳定复现、本地 50k 却 200，就是这条维度差。
+func TestCompressTriggersOnCharLimit(t *testing.T) {
+	ResetSummaryCache()
+	t.Setenv("MAX_INPUT_TOKENS", "7500")
+	t.Setenv("MAX_INPUT_CHARS", "19000")
+	req := duckgotypes.NewApiRequest("gpt-5.6-luna")
+	req.AddMessage("user", strings.Repeat("abcdefghij", 2000)[:20000])
+	if total, _ := TokenBudget(&req); total > 7500 {
+		t.Fatalf("夹具前提：token 不该超限，实际 %d", total)
+	}
+	_, rounds, fits := CompressToFit(&req, func(string) (string, error) { return "摘要", nil })
+	if rounds == 0 || !fits {
+		t.Fatalf("字符超限必须触发压缩: rounds=%d fits=%v chars=%d", rounds, fits, InputChars(&req))
+	}
+	if c := InputChars(&req); c > 19000 {
+		t.Errorf("压完仍超字符上限: %d", c)
+	}
+}
+
+// 中文不该被 token 上限误伤：6,500 汉字 = 3,900 tiktoken，远未到上游 19k 字符上限，
+// 不该触发压缩（否则每次中文对话都多一次上游调用 + 信息损失）。
+func TestCompressLeavesChineseAlone(t *testing.T) {
+	ResetSummaryCache()
+	t.Setenv("MAX_INPUT_TOKENS", "7500")
+	t.Setenv("MAX_INPUT_CHARS", "19000")
+	req := duckgotypes.NewApiRequest("gpt-5.6-luna")
+	req.AddMessage("user", strings.Repeat("中文内容。", 1300)) // 6500 字
+	if rounds, fits := func() (int, bool) {
+		_, r, f := CompressToFit(&req, func(string) (string, error) { return "摘要", nil })
+		return r, f
+	}(); rounds != 0 || !fits {
+		t.Fatalf("未超限不该压缩: rounds=%d fits=%v", rounds, fits)
+	}
+}

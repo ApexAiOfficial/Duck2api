@@ -206,7 +206,11 @@ func headTail(text string, targetTokens int) string {
 func CompressToFit(req *duckgotypes.ApiRequest, summarize SummarizeFunc) (dropped, rounds int, fits bool) {
 	limit := MaxInputTokens()
 	if limit <= 0 || req == nil || summarize == nil {
-		return 0, 0, true
+		// 字符维度仍要守：token 守卫被显式关掉（负数）时，字符上限是最后一道。
+		if req == nil || summarize == nil || !OverInputLimit(req, 0) {
+			return 0, 0, true
+		}
+		limit = InputChars(req) // 用字符数当预算，压缩路径仍要走
 	}
 	prefix := req.KeepPrefix
 	if prefix < 1 {
@@ -218,7 +222,7 @@ func CompressToFit(req *duckgotypes.ApiRequest, summarize SummarizeFunc) (droppe
 	shrunk := false
 	for rounds <= req.MessageCount() {
 		total, prefixTokens := TokenBudget(req)
-		if total <= limit {
+		if !OverInputLimit(req, total) {
 			return dropped, rounds, true
 		}
 		// 一条就把上限撑爆（大文件、长工具输出一次性塞进单条消息）时，条目之间无解：

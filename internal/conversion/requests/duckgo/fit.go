@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"unicode/utf8"
 
 	duckgotypes "aurora/internal/typings/duckgo"
 	"aurora/internal/util"
@@ -29,6 +30,59 @@ import (
 // 默认 7,500 取在这个缝里，偏松：偏松的代价小（超了也只是一次 ~4s 的 typed 400，
 // 确定性失败已不重试），偏紧的代价大（会裁掉真实内容，或把一个上游本可服务的请求拒掉）。
 const DefaultMaxInputTokens = 7500
+
+// 上游上限其实是**字符**维度（实测 19,017 ASCII 字符通过 / 20,017 被拒），而本守卫用
+// tiktoken 计数：ASCII 与上游几乎一致（19,017 字符 → 3804 token），中文却偏高（15,000
+// 汉字 → 9,000 token）。所以只用 token 一刀切会在两边各错一次：
+//   - 默认 7,500 token 对 ASCII 太松 —— 20k 字符 = 4,004 token 不触发压缩，原样送上游被拒
+//     （生产上就是这么 400 的，本地复现不到是因为本地跑在 7500 的边界之外）；
+//   - 把 token 上限压到 4,000 对中文太紧 —— 6,500 汉字就会被无谓压缩，多一次上游调用、
+//     多一份信息损失。
+//
+// 因此补一个字符维度的上限，任一维度超了才压。
+const DefaultMaxInputChars = 19000
+
+// MaxInputChars 生效的字符上限；MAX_INPUT_CHARS 未设置/非法/0 按默认，负数关闭该维度。
+func MaxInputChars() int {
+	v := os.Getenv("MAX_INPUT_CHARS")
+	if v == "" {
+		return DefaultMaxInputChars
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return DefaultMaxInputChars
+	}
+	if n < 0 {
+		return 0
+	}
+	if n == 0 {
+		return DefaultMaxInputChars
+	}
+	return n
+}
+
+// InputChars 请求正文的总字符数（rune 计）。
+func InputChars(req *duckgotypes.ApiRequest) int {
+	if req == nil {
+		return 0
+	}
+	n := 0
+	for i := 0; i < req.MessageCount(); i++ {
+		n += utf8.RuneCountInString(req.MessageText(i))
+	}
+	return n
+}
+
+// OverInputLimit 报告请求是否已超上游单请求上限（token 与字符任一维度）。
+func OverInputLimit(req *duckgotypes.ApiRequest, tokens int) bool {
+	if l := MaxInputTokens(); l > 0 && tokens > l {
+		return true
+	}
+	if c := MaxInputChars(); c > 0 && InputChars(req) > c {
+		return true
+	}
+	return false
+}
 
 // MaxInputTokens 生效上限；MAX_INPUT_TOKENS 未设置/非法/0 都按默认，负数表示关闭守卫。
 //
@@ -72,7 +126,7 @@ func FitToUpstreamLimit(req *duckgotypes.ApiRequest) (int, bool) {
 		tok[i] = util.CountToken(req.MessageText(i))
 		total += tok[i]
 	}
-	if total <= limit {
+	if !OverInputLimit(req, total) {
 		return 0, true
 	}
 

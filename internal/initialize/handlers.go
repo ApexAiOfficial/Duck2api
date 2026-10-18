@@ -189,8 +189,11 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 	if !original_request.Stream {
 		// 模型要调工具: 按 OpenAI 原生结构回写, finish_reason=tool_calls
 		if len(result.ToolCalls) > 0 {
-			c.JSON(200, officialtypes.NewChatCompletionToolCalls(original_request.Model, duckgo.OfficialToolCalls(result.ToolCalls),
-				int64(inputTokens), int64(result.OutputTokens), result.TTFTMs, result.TotalMs))
+			completed := officialtypes.NewChatCompletionToolCalls(original_request.Model, duckgo.OfficialToolCalls(result.ToolCalls),
+				int64(inputTokens), int64(result.OutputTokens), result.TTFTMs, result.TotalMs)
+			// 工具轮同样要带思考：agent 客户端几乎每轮都在调工具，丢了就等于永远看不到思考。
+			completed.Choices[0].Message.ReasoningContent = result.Reasoning
+			c.JSON(200, completed)
 			return
 		}
 		completed := officialtypes.NewChatCompletionFull(

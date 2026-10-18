@@ -3,11 +3,13 @@ package initialize
 import (
 	"encoding/json"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"aurora/internal/duckgo"
+	duckgotypes "aurora/internal/typings/duckgo"
 	officialtypes "aurora/internal/typings/official"
 )
 
@@ -119,5 +121,36 @@ func TestResponsesStreamToolPathAnnouncesReasoningOnce(t *testing.T) {
 	}
 	if !strings.Contains(out, `"type":"function_call"`) {
 		t.Errorf("工具调用没有回写成 function_call:\n%s", out)
+	}
+}
+
+// 工具轮也要带思考：agent 客户端几乎每轮都在调工具，工具分支丢了思考就等于永远看不到。
+func TestChatToolBranchKeepsReasoning(t *testing.T) {
+	sse := `data: {"id":"rs1","action":"success","model":"gpt-5.6-luna","role":"reasoning","state":"text-delta","text":"我该查一下日期。"}` + "\n" +
+		`data: {"id":"m1","action":"success","model":"gpt-5.6-luna","role":"assistant","message":"<tool_call>{\"name\":\"get_date\",\"arguments\":{}}</tool_call>"}` + "\n" +
+		"data: [DONE]\n"
+
+	c, w := newTestContext()
+	var oldReq duckgotypes.ApiRequest
+	oldReq.Model = "gpt-5.6-luna"
+	stats := duckgo.HandlerStats{Start: time.Now().Add(-100 * time.Millisecond), PromptTokens: 5, Tools: true}
+	result := duckgo.Handler(c, &http.Response{StatusCode: 200, Header: http.Header{},
+		Body: io.NopCloser(strings.NewReader(sse))}, oldReq, false, stats)
+	if w.Body.Len() != 0 {
+		t.Errorf("非流式不该往 writer 写 SSE: %s", w.Body.String())
+	}
+
+	if len(result.ToolCalls) == 0 {
+		t.Fatalf("没有解析出工具调用: %+v", result)
+	}
+	completed := officialtypes.NewChatCompletionToolCalls(oldReq.Model, duckgo.OfficialToolCalls(result.ToolCalls),
+		int64(5), int64(result.OutputTokens), result.TTFTMs, result.TotalMs)
+	completed.Choices[0].Message.ReasoningContent = result.Reasoning
+
+	if completed.Choices[0].Message.ReasoningContent != "我该查一下日期。" {
+		t.Errorf("工具轮丢了思考: %+v", completed.Choices[0].Message)
+	}
+	if completed.Choices[0].FinishReason != "tool_calls" {
+		t.Errorf("finish_reason = %v", completed.Choices[0].FinishReason)
 	}
 }

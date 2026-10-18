@@ -159,6 +159,28 @@ func (a *ApiRequest) MessageText(i int) string {
 	return a.Messages[i].Content.CountableText()
 }
 
+// SetMessageText 把第 i 条消息的正文换成纯文本（保留 role，越界是空操作）。
+// 只给上限守卫的「单条超限压摘要」用：那条路径本来就只处理纯文本消息。
+func (a *ApiRequest) SetMessageText(i int, content string) {
+	if i < 0 || i >= len(a.Messages) {
+		return
+	}
+	a.Messages[i].Content = MessageContent{Parts: []ContentPart{{Type: "text", Text: content}}}
+}
+
+// MessageHasMedia 报告第 i 条消息是否带非文本 part（图片/文件）。
+func (a *ApiRequest) MessageHasMedia(i int) bool {
+	if i < 0 || i >= len(a.Messages) {
+		return false
+	}
+	for _, p := range a.Messages[i].Content.Parts {
+		if p.Type != "text" {
+			return true
+		}
+	}
+	return false
+}
+
 // InsertMessageAt 在第 i 条之前插入一条消息（i 越界时追加）。
 func (a *ApiRequest) InsertMessageAt(i int, role string, content string) {
 	a.Messages = append(a.Messages, messages{})

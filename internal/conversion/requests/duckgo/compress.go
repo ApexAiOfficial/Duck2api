@@ -3,6 +3,7 @@ package duckgo
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -86,6 +87,114 @@ func TokenBudget(req *duckgotypes.ApiRequest) (total, prefix int) {
 	return total, prefix
 }
 
+// shrinkTruncatedMarker 摘要失败时的降级标记：头尾保留、中间省略，让模型知道这段被截过。
+const shrinkTruncatedMarker = "\n\n……（中间 %d 字因单请求上限已省略）……\n\n"
+
+// shrinkOversized 把「一条自身就撑爆上限」的消息压成有界摘要，返回改动的条数。
+//
+// 为什么需要它：CompressToFit 只在消息之间取舍，遇到「一条就超限」时 room<=0 直接放弃，
+// 请求原样出站被上游拒成 400 context_length_exceeded —— 而 agent 恰恰常把大文件、长工具
+// 输出一次性塞进单条消息。这里按 scripts/context_review.py 那套「分块滚动摘要」处理：
+// 每块喂「已有摘要 + 本块」，摘要在上游单请求上限之内，所以任意长度都能压成有界一段。
+//
+// 只处理纯文本消息：带图片/文件的消息压成摘要会连视觉内容一起丢掉，保持原状让守卫拒绝。
+func shrinkOversized(req *duckgotypes.ApiRequest, summarize SummarizeFunc, limit int) int {
+	if req == nil || summarize == nil || limit <= 0 {
+		return 0
+	}
+	target := limit / 3
+	if target < 32 {
+		target = 32
+	}
+	changed := 0
+	for i := 0; i < req.MessageCount(); i++ {
+		if util.CountToken(req.MessageText(i)) <= limit/2 || req.MessageHasMedia(i) {
+			continue
+		}
+		text := req.MessageText(i)
+		out := rollingSummary(text, summarize, limit)
+		if out == "" {
+			out = headTail(text, target)
+		}
+		// 最后一条几乎总是用户的真实请求，整条换成摘要会让模型去「回答摘要」而不是回答
+		// 请求（实测：问「只回复 OK」，回的是摘要的要点）。开头原文照留，指令就保住了。
+		if i == req.MessageCount()-1 {
+			out += "\n\n【原消息开头】\n" + leadingText(text, limit/8)
+		}
+		req.SetMessageText(i, summaryPrefix+out)
+		changed++
+	}
+	return changed
+}
+
+// rollingSummary 把超长文本切块滚动摘要；单块失败但有累计结果时返回累计值，全失败返回空串。
+func rollingSummary(text string, summarize SummarizeFunc, limit int) string {
+	budget := limit / 2 // 单次摘要请求的输入预算（摘要本身由 summarizer 限制在 400 字）
+	if budget < 64 {
+		budget = 64
+	}
+	total := util.CountToken(text)
+	parts := total/budget + 1
+	if parts < 1 {
+		parts = 1
+	}
+	runes := []rune(text)
+	size := len(runes)/parts + 1
+	acc := ""
+	for start := 0; start < len(runes); start += size {
+		end := start + size
+		if end > len(runes) {
+			end = len(runes)
+		}
+		in := string(runes[start:end])
+		if acc != "" {
+			in = acc + "\n\n" + in
+		}
+		out, err := summarize(in)
+		if err != nil || strings.TrimSpace(out) == "" {
+			if acc != "" {
+				return acc // 部分成功：用已累计的摘要，后面截断兜底
+			}
+			return ""
+		}
+		acc = out
+	}
+	return acc
+}
+
+// leadingText 取 text 开头、不超过 budgetTokens 的一段（指令通常在最前面）。
+func leadingText(text string, budgetTokens int) string {
+	r := []rune(text)
+	keep := len(r) / 4
+	for keep > 8 {
+		cand := string(r[:keep])
+		if util.CountToken(cand) <= budgetTokens {
+			return cand
+		}
+		keep = keep * 3 / 4
+	}
+	return string(r[:min(len(r), 80)])
+}
+
+// headTail 保留头 2/3、尾 1/3，中间用标记代替；逐次收紧直到落进 targetTokens。
+func headTail(text string, targetTokens int) string {
+	r := []rune(text)
+	keep := len(r) * 2 / 3
+	for keep > 8 {
+		head := keep * 2 / 3
+		tail := keep - head
+		cand := string(r[:head]) + fmt.Sprintf(shrinkTruncatedMarker, len(r)-keep) + string(r[len(r)-tail:])
+		if util.CountToken(cand) <= targetTokens {
+			return cand
+		}
+		keep = keep * 3 / 4
+	}
+	if len(r) > 64 {
+		return string(r[:64])
+	}
+	return string(r)
+}
+
 // CompressToFit 把前缀之后最老的一段历史换成一条摘要消息，直到装得下或压不动。
 // 返回 (压掉的条数, 压了几轮, 是否已装得下)；summarize 为 nil 或失败时原样返回。
 func CompressToFit(req *duckgotypes.ApiRequest, summarize SummarizeFunc) (dropped, rounds int, fits bool) {
@@ -100,10 +209,24 @@ func CompressToFit(req *duckgotypes.ApiRequest, summarize SummarizeFunc) (droppe
 
 	// 轮数上限只能是「消息条数」：每一轮至少消化一条，必然终止。写死 3 轮时，
 	// 一条就吃掉半个预算的大消息（长工具输出）压两三轮仍在超限，等于没压。
+	shrunk := false
 	for rounds <= req.MessageCount() {
 		total, prefixTokens := TokenBudget(req)
 		if total <= limit {
 			return dropped, rounds, true
+		}
+		// 一条就把上限撑爆（大文件、长工具输出一次性塞进单条消息）时，条目之间无解：
+		// 下面会走到 room<=0 直接返回 false，请求原样出站被上游拒成 400。先把这条
+		// 自己压成摘要再回到常规流程。只试一次，避免压不动时反复触发上游。
+		if !shrunk {
+			shrunk = true
+			if k := shrinkOversized(req, summarize, limit); k > 0 {
+				now, _ := TokenBudget(req)
+				log.Printf("[COMPRESS] 单条超限：滚动摘要 %d 条，%d → %d token", k, total, now)
+				dropped += k
+				rounds++
+				continue
+			}
 		}
 		// 除了预留的摘要空间，还要给最新一条留位置 —— 否则压完仍装不下。
 		newest := util.CountToken(req.MessageText(req.MessageCount() - 1))

@@ -98,3 +98,79 @@ func TestCompressSkipsWhenUnderLimit(t *testing.T) {
 		t.Errorf("未超限却压缩: dropped=%d rounds=%d calls=%d", dropped, rounds, calls)
 	}
 }
+
+// 单条消息自己就撑爆上限（agent 把大文件/长工具输出一次性塞进来）时，必须压那条消息本身：
+// 此前 CompressToFit 只在条目之间取舍，这种形态 room<=0 直接放弃，请求出站被上游拒成
+// 400 context_length_exceeded。压完仍由 TokenBudget 复核装不装得下。
+func TestCompressShrinksSingleOversizedMessage(t *testing.T) {
+	ResetSummaryCache()
+	t.Setenv("MAX_INPUT_TOKENS", "1200")
+	req := duckgotypes.NewApiRequest("gpt-5.6-luna")
+	req.AddMessage("user", strings.Repeat("一次性塞进来的大文件内容。", 400))
+	if req.KeepPrefix != 0 {
+		t.Fatalf("夹具前提：无 tools 注入时 KeepPrefix 应为 0，实际 %d", req.KeepPrefix)
+	}
+	before, _ := TokenBudget(&req)
+	if before <= 1200 {
+		t.Fatalf("夹具不够大: %d token", before)
+	}
+
+	calls := 0
+	dropped, rounds, fits := CompressToFit(&req, func(text string) (string, error) {
+		calls++
+		return "这条消息是一份大文件，要点若干。", nil
+	})
+	after, _ := TokenBudget(&req)
+	if !fits || after > 1200 {
+		t.Fatalf("压完仍超限: before=%d after=%d fits=%v", before, after, fits)
+	}
+	if dropped != 1 || rounds == 0 {
+		t.Errorf("应按「压掉 1 条」记账: dropped=%d rounds=%d", dropped, rounds)
+	}
+	if calls == 0 {
+		t.Error("没有调用摘要：单条超限必须走滚动摘要")
+	}
+	got := req.MessageText(0)
+	if !strings.HasPrefix(got, summaryPrefix) {
+		t.Errorf("消息未替换成摘要: %.40q", got)
+	}
+	// 末条是用户真实请求：开头原文必须留在里面，否则模型去「回答摘要」（实测问「只回复
+	// OK」时回了摘要要点）。
+	if !strings.Contains(got, "【原消息开头】") || !strings.Contains(got, "一次性塞进来的大文件内容") {
+		t.Errorf("末条未保留开头原文: %.80q", got)
+	}
+}
+
+// 摘要不可用时降级为头尾截断（带省略标记），仍要让请求能进上游，而不是 400。
+func TestCompressSingleOversizedFallsBackToTruncate(t *testing.T) {
+	ResetSummaryCache()
+	t.Setenv("MAX_INPUT_TOKENS", "1200")
+	req := duckgotypes.NewApiRequest("gpt-5.6-luna")
+	req.AddMessage("user", strings.Repeat("abcdefghij", 4000))
+
+	_, _, fits := CompressToFit(&req, func(string) (string, error) {
+		return "", errors.New("summarizer down")
+	})
+	if !fits {
+		t.Fatalf("摘要失败也必须靠截断装下: total=%d", func() int { n, _ := TokenBudget(&req); return n }())
+	}
+	got := req.MessageText(0)
+	if !strings.Contains(got, "已省略") || !strings.HasPrefix(got, summaryPrefix) {
+		t.Errorf("降级结果应是带省略标记的摘要消息: %.60q", got)
+	}
+}
+
+// 带图片的消息不压：压成摘要会把视觉内容一起丢掉，那种形态继续交给上限守卫拒绝。
+func TestCompressLeavesMediaMessageAlone(t *testing.T) {
+	ResetSummaryCache()
+	t.Setenv("MAX_INPUT_TOKENS", "1200")
+	req := duckgotypes.NewApiRequest("gpt-5.6-luna")
+	req.AddMessageWithParts("user", []duckgotypes.ContentPart{
+		{Type: "text", Text: strings.Repeat("x", 20000)},
+		{Type: "image", Image: "data:image/png;base64,AAA"},
+	})
+	CompressToFit(&req, func(string) (string, error) { return "摘要", nil })
+	if strings.HasPrefix(req.MessageText(0), summaryPrefix) {
+		t.Error("带图片的消息不该被摘要替换")
+	}
+}

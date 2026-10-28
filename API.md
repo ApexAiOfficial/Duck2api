@@ -1,26 +1,24 @@
-# Duck2API 接口文档
+# Duck2API API Reference
 
-Duck2API 提供与 OpenAI API 完全兼容的接口，底层使用 DuckDuckGo AI Chat 服务。
+Duck2API provides OpenAI-compatible endpoints backed by DuckDuckGo AI Chat. Compatibility is implemented by this gateway; it is not an official DuckDuckGo API.
 
-## 基础信息
+## Basics
 
-- Base URL: `http://localhost:8080`
-- 认证方式: `Authorization: Bearer <key>`（如设置了 `Authorization` 环境变量）
-- 响应格式: `application/json`
+- **Base URL:** `http://localhost:8080`
+- **Authentication:** `Authorization: Bearer <key>` when the `Authorization` environment variable is configured
+- **Default response type:** `application/json`; streaming uses Server-Sent Events
 
----
-
-## 目录
+## Contents
 
 1. [Chat Completions](#1-chat-completions)
 2. [Responses API](#2-responses-api)
-3. [图像生成](#3-图像生成)
-4. [图像编辑](#4-图像编辑)
-5. [文件管理](#5-文件管理)
-6. [语音转文字](#6-语音转文字)
-7. [文字转语音](#7-文字转语音)
-8. [模型列表](#8-模型列表)
-9. [健康检查](#9-健康检查)
+3. [Image generation](#3-image-generation)
+4. [Image editing](#4-image-editing)
+5. [File management](#5-file-management)
+6. [Audio transcription](#6-audio-transcription)
+7. [Text to speech](#7-text-to-speech)
+8. [Models](#8-models)
+9. [Health checks](#9-health-checks)
 
 ---
 
@@ -28,255 +26,123 @@ Duck2API 提供与 OpenAI API 完全兼容的接口，底层使用 DuckDuckGo AI
 
 ### `POST /v1/chat/completions`
 
-与 DuckDuckGo AI 进行对话，支持推理模式和网络搜索。
+Send a conversation to an available model; the gateway supports optional reasoning modes and web search.
 
-### 请求体
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `model` | string | Yes | Model identifier; consult `GET /v1/models` |
+| `messages` | array | Yes | Conversation messages |
+| `stream` | boolean | No | Enable streaming; defaults to `false` |
+| `reasoning_effort` | string | No | `none`, `low`, `medium`, or `high` |
+| `web_search` | boolean | No | Enable upstream web search; defaults to `false` |
+| `file_ids` | string[] | No | Previously uploaded files to use as context |
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `model` | string | 是 | 模型名称，见 [支持的模型](#支持的模型) |
-| `messages` | array | 是 | 消息数组 |
-| `stream` | boolean | 否 | 是否流式输出，默认 `false` |
-| `reasoning_effort` | string | 否 | 推理深度：`none`/`low`/`medium`/`high` |
-| `web_search` | boolean | 否 | 启用网络搜索，默认 `false` |
-| `file_ids` | string[] | 否 | 文件 ID 列表（使用已上传的文件作为上下文） |
-
-### Messages 结构
+Simple message:
 
 ```json
-{
-  "role": "user",
-  "content": "你好"
-}
+{"role":"user","content":"Hello"}
 ```
 
-支持多模态内容（图片）：
+A multimodal message can contain text and images:
 
 ```json
 {
   "role": "user",
   "content": [
-    {"type": "text", "text": "描述这张图片"},
+    {"type": "text", "text": "Describe this image"},
     {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
   ]
 }
 ```
 
-### 请求示例
+Example:
 
-**基础对话:**
 ```bash
 curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o-mini",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": false
-  }'
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-5.6-luna","messages":[{"role":"user","content":"Hello"}],"stream":false}'
 ```
 
-**推理模式:**
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.4-mini",
-    "messages": [{"role": "user", "content": "证明勾股定理"}],
-    "reasoning_effort": "high"
-  }'
-```
-
-**联网搜索:**
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.4-nano",
-    "messages": [{"role": "user", "content": "今天有什么新闻"}],
-    "web_search": true
-  }'
-```
-
-**带文件上下文:**
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.4-nano",
-    "messages": [{"role": "user", "content": "总结这个文件"}],
-    "file_ids": ["file-1234567890"]
-  }'
-```
-
-### 响应示例
-
-**非流式:**
-```json
-{
-  "id": "chatcmpl-xxx",
-  "object": "chat.completion",
-  "created": 0,
-  "model": "gpt-4o-mini",
-  "usage": {
-    "prompt_tokens": 0,
-    "completion_tokens": 0,
-    "total_tokens": 0
-  },
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "你好！有什么可以帮你的？"
-      },
-      "finish_reason": null
-    }
-  ]
-}
-```
-
-**流式:**
-```
-data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"你"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"好"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
-
-data: [DONE]
-```
-
----
+For a reasoning request, add `"reasoning_effort":"high"`. For web search, add `"web_search":true`. Streaming responses use OpenAI-style event chunks.
 
 ## 2. Responses API
 
 ### `POST /v1/responses`
 
-OpenAI Responses API 兼容接口。
-
-### 请求体
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `model` | string | 是 | 模型名称 |
-| `input` | string/array | 是 | 输入内容 |
-| `instructions` | string | 否 | 系统指令 |
-| `stream` | boolean | 否 | 流式输出 |
-
-### 请求示例
+OpenAI Responses-compatible endpoint for input messages and, where supported, function/custom tool calls. Responses may be streamed.
 
 ```bash
 curl http://localhost:8080/v1/responses \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5-mini",
-    "input": "你好",
-    "instructions": "你是一个有帮助的助手"
-  }'
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-5.6-luna","input":"Explain a binary search tree.","stream":false}'
 ```
 
----
+Tool calling is emulated through model instructions; the upstream chat interface does not guarantee native structured tool output. The gateway handles client tool definitions and presents parsed tool requests in the expected response form, but clients execute the tools.
 
-## 3. 图像生成
+## 3. Image generation
 
 ### `POST /v1/images/generations`
 
-文本生成图像，返回 base64 编码的图片数据。
-
-### 请求体
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `prompt` | string | 是 | 图像描述 |
-| `model` | string | 否 | 模型，默认 `gpt-5.4-nano` |
-| `n` | integer | 否 | 生成数量，默认 `1` |
-| `response_format` | string | 否 | `b64_json`（默认） |
-| `reasoning_effort` | string | 否 | 推理深度：`none`/`low`/`medium`/`high`，默认 `none` |
-
-### 请求示例
+Generate an image from a prompt. The default route uses the gateway's `image-generation` model.
 
 ```bash
 curl http://localhost:8080/v1/images/generations \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "一只可爱的猫咪坐在窗台上，阳光照射",
-    "model": "gpt-5.4-mini",
-    "reasoning_effort": "low"
-  }'
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"A cheerful duck sitting beside a pond"}'
 ```
 
-### 响应示例
+Example response structure:
 
 ```json
-{
-  "created": 1719398400,
-  "data": [
-    {
-      "b64_json": "iVBORw0KGgo...",
-      "revised_prompt": "..."
-    }
-  ]
-}
+{"data":[{"b64_json":"iVBORw0KGgo...","revised_prompt":"..."}]}
 ```
 
----
+Depending on the selected gateway alias, image generation can use either the native image route or a chat-model tool route. The distinction matters because the latter may rewrite the prompt. See [README.md](README.md).
 
-## 4. 图像编辑
+## 4. Image editing
 
 ### `POST /v1/images/edits`
 
-基于已有图像进行编辑（图生图/改图）。
+Edit an uploaded or base64-encoded image. The current implementation uses the native image model for editing.
 
-### 请求方式
+JSON input:
 
-**JSON 方式:**
 ```bash
 curl http://localhost:8080/v1/images/edits \
-  -H "Content-Type: application/json" \
-  -d '{
-    "image": "<base64编码图片>",
-    "prompt": "把背景改成海滩",
-    "model": "gpt-5.4-nano"
-  }'
+  -H 'Content-Type: application/json' \
+  -d '{"image":"<base64-image>","prompt":"Replace the background with a beach"}'
 ```
 
-**文件上传方式:**
+Multipart input:
+
 ```bash
 curl http://localhost:8080/v1/images/edits \
-  -F "image=@photo.png" \
-  -F "prompt=把背景改成海滩" \
-  -F "model=gpt-5.4-nano"
+  -F 'image=@photo.png' \
+  -F 'prompt=Replace the background with a beach'
 ```
 
-### 请求字段
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `image` | string/file | Yes | Base64 image, data URL, or uploaded file |
+| `prompt` | string | Yes | Editing instructions |
+| `model` | string | No | Accepted for compatibility; does not select the editing route |
+| `reasoning_effort` | string | No | Accepted reasoning parameter |
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `image` | string/file | 是 | base64 图片或文件上传 |
-| `prompt` | string | 是 | 编辑指令 |
-| `model` | string | 否 | 模型，默认 `gpt-5.4-nano` |
-| `reasoning_effort` | string | 否 | 推理深度：`none`/`low`/`medium`/`high` |
+## 5. File management
 
----
-
-## 5. 文件管理
-
-### 上传文件
-
-#### `POST /v1/files`
+Upload:
 
 ```bash
-curl http://localhost:8080/v1/files \
-  -F "file=@document.pdf" \
-  -F "purpose=assistants"
+curl http://localhost:8080/v1/files -F 'file=@document.pdf' -F 'purpose=assistants'
 ```
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `file` | file | 是 | 上传的文件 |
-| `purpose` | string | 否 | 用途，默认 `assistants` |
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | file | Yes | File to upload |
+| `purpose` | string | No | Purpose; defaults to `assistants` |
 
-**响应:**
+Example upload response:
+
 ```json
 {
   "id": "file-1719398400000000000",
@@ -288,208 +154,153 @@ curl http://localhost:8080/v1/files \
 }
 ```
 
-### 列出文件
+Additional endpoints:
 
-#### `GET /v1/files`
+| Endpoint | Description |
+|---|---|
+| `GET /v1/files` | List uploaded files |
+| `GET /v1/files/:file_id` | Retrieve file metadata |
+| `DELETE /v1/files/:file_id` | Delete a file |
+| `GET /v1/files/:file_id/content` | Download file contents |
+
+List files:
 
 ```bash
 curl http://localhost:8080/v1/files
 ```
 
-**响应:**
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "id": "file-xxx",
-      "object": "file",
-      "bytes": 12345,
-      "created_at": 1719398400,
-      "filename": "document.pdf",
-      "purpose": "assistants"
-    }
-  ]
-}
-```
-
-### 获取文件信息
-
-#### `GET /v1/files/:file_id`
-
-```bash
-curl http://localhost:8080/v1/files/file-xxx
-```
-
-### 删除文件
-
-#### `DELETE /v1/files/:file_id`
+Delete a file:
 
 ```bash
 curl -X DELETE http://localhost:8080/v1/files/file-xxx
 ```
 
-**响应:**
-```json
-{
-  "id": "file-xxx",
-  "object": "file",
-  "deleted": true
-}
-```
-
-### 下载文件内容
-
-#### `GET /v1/files/:file_id/content`
+Download:
 
 ```bash
 curl http://localhost:8080/v1/files/file-xxx/content -o output.pdf
 ```
 
-### 文件问答流程
+File Q&A workflow: upload a file, capture its `file_id`, then include that ID under `file_ids` in your Chat Completions request.
 
-1. 上传文件 → 获取 `file_id`
-2. 在 Chat Completions 请求中传入 `file_ids`
-3. 文件内容会自动作为上下文注入到对话中
-
----
-
-## 6. 语音转文字
+## 6. Audio transcription
 
 ### `POST /v1/audio/transcriptions`
 
-Whisper 兼容的语音转文字接口，底层调用 Duck.ai 的听写服务。
-
-### 请求方式
+Whisper-compatible transcription interface backed by Duck.ai's dictation feature.
 
 ```bash
 curl http://localhost:8080/v1/audio/transcriptions \
-  -F "file=@audio.webm" \
-  -F "model=whisper-1"
+  -F 'file=@audio.webm' \
+  -F 'model=whisper-1'
 ```
 
-### 请求字段
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | file | Yes | Audio data |
+| `model` | string | No | Compatibility parameter; Duck.ai provides the transcription |
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `file` | file | 是 | 音频文件 |
-| `model` | string | 否 | 模型（兼容参数，实际使用 Duck.ai 听写） |
+Supported formats:
 
-### 支持的音频格式
-
-| 格式 | MIME Type |
-|------|-----------|
+| Audio format | MIME type |
+|---|---|
 | WebM | `audio/webm` |
 | OGG | `audio/ogg` |
 | MP3 | `audio/mpeg` |
 | WAV | `audio/wav` |
 | M4A | `audio/mp4` |
 | FLAC | `audio/flac` |
-| OPUS | `audio/opus` |
+| Opus | `audio/opus` |
 | AAC | `audio/aac` |
 
-### 响应示例
+Response example:
 
 ```json
-{
-  "text": "这是一段语音转文字的结果"
-}
+{"text":"An example transcription result"}
 ```
 
----
-
-## 7. 文字转语音
+## 7. Text to speech
 
 ### `POST /v1/audio/speech`
 
-OpenAI 兼容的文字转语音接口。底层使用 Duck.ai 的 WebRTC + OpenAI Realtime API（`gpt-realtime-mini`）生成语音。
+The speech endpoint uses Duck.ai's WebRTC session with an OpenAI Realtime model.
 
-### 请求体
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `model` | string | Yes | Compatibility model, such as `tts-1` |
+| `input` | string | Yes | Text to synthesize |
+| `voice` | string | No | Voice name, e.g. `alloy` (default) |
+| `response_format` | string | No | `mp3` (default), `wav`, `ogg`, `flac`, `aac` |
+| `speed` | number | No | Accepted but not currently supported |
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `model` | string | 是 | 模型，如 `tts-1` |
-| `input` | string | 是 | 要转换的文字 |
-| `voice` | string | 否 | 语音，如 `alloy`，默认 `alloy` |
-| `response_format` | string | 否 | 输出格式：`mp3`（默认）、`wav`、`ogg`、`flac`、`aac` |
-| `speed` | number | 否 | 语速（暂不支持） |
-
-### 请求示例
+MP3:
 
 ```bash
-# MP3 格式
 curl http://localhost:8080/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{"model":"tts-1","input":"你好，世界！","voice":"alloy","response_format":"mp3"}' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"tts-1","input":"Hello world","voice":"alloy","response_format":"mp3"}' \
   --output speech.mp3
+```
 
-# WAV 格式
+WAV:
+
+```bash
 curl http://localhost:8080/v1/audio/speech \
-  -H "Content-Type: application/json" \
+  -H 'Content-Type: application/json' \
   -d '{"model":"tts-1","input":"Hello world","response_format":"wav"}' \
   --output speech.wav
+```
 
-# OGG/Opus 格式（直接返回，无需 FFmpeg 转换）
+OGG:
+
+```bash
 curl http://localhost:8080/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{"model":"tts-1","input":"测试语音","response_format":"ogg"}' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"tts-1","input":"Test speech","response_format":"ogg"}' \
   --output speech.ogg
 ```
 
-### 响应
+| Format | Content-Type |
+|---|---|
+| MP3 | `audio/mpeg` |
+| WAV | `audio/wav` |
+| OGG | `audio/ogg` |
+| FLAC | `audio/flac` |
+| AAC | `audio/aac` |
 
-直接返回音频二进制数据，`Content-Type` 根据格式不同：
+Audio is returned as binary response data. The implementation establishes a WebRTC connection, sends text through a DataChannel, receives Opus audio, and uses FFmpeg where conversion is required. **Install FFmpeg** for MP3/WAV/FLAC/AAC conversion; OGG/Opus requires no transcoding.
 
-| 格式 | Content-Type |
-|------|-------------|
-| mp3 | `audio/mpeg` |
-| wav | `audio/wav` |
-| ogg | `audio/ogg` |
-| flac | `audio/flac` |
-| aac | `audio/aac` |
-
-### 技术实现
-
-1. 通过 WebRTC 连接 Duck.ai 的 OpenAI Realtime API（`gpt-realtime-mini-2025-12-15`）
-2. 通过 DataChannel 发送文字，接收音频事件
-3. 通过 MediaTrack 接收 AI 语音（Opus 格式）
-4. 使用 FFmpeg 转换为目标格式（需要系统安装 FFmpeg）
-
-> **注意**: 需要系统安装 FFmpeg 才能支持 MP3/WAV/FLAC/AAC 格式转换。OGG/Opus 格式无需 FFmpeg。
-
----
-
-## 8. 模型列表
+## 8. Models
 
 ### `GET /v1/models`
 
-每次请求都会实时读取 DuckDuckGo 的 `https://duck.ai/duckchat/v1/models`，并转换为 OpenAI 兼容的模型列表，因此无需手动维护模型 ID。
+Fetch the gateway's model list, generally based on Duck.ai's live `https://duck.ai/duckchat/v1/models` response, with additional local mappings.
 
 ```bash
 curl http://localhost:8080/v1/models
 ```
 
-### 响应示例
+Example response:
 
 ```json
 {
   "object": "list",
-  "data": [
-    {
-      "id": "gpt-5.4",
-      "object": "model",
-      "created": 0,
-      "owned_by": "openai"
-    }
-  ]
+  "data": [{"id":"gpt-5.4","object":"model","created":0,"owned_by":"openai"}]
 }
 ```
 
-`created` 为当前服务生成响应时的 Unix 时间戳，`owned_by` 对应 DuckDuckGo 上游响应中的 `provider`。上游请求失败时，接口会返回对应的上游 HTTP 状态码和错误信息。
+The server normally supplies a current Unix timestamp for `created`; `owned_by` comes from upstream provider metadata. Failures should be reported with upstream HTTP status and error information.
 
----
+The available model set is dynamic. Previously documented examples include:
 
-## 9. 健康检查
+| Type | Models |
+|---|---|
+| General | `claude-haiku-4-5`, `mistral-small-2603`, `tinfoil/gemma4-31b` |
+| Reasoning | `gpt-5.4-mini`, `gpt-5.6-luna`, `gpt-6-luna` |
+
+Availability is not guaranteed. Prefer `GET /v1/models` and verify requests against your current upstream access.
+
+## 9. Health checks
 
 ### `GET /`
 
@@ -497,7 +308,7 @@ curl http://localhost:8080/v1/models
 curl http://localhost:8080/
 ```
 
-响应: `{"message": "Hello, world!"}`
+Example response: `{"message":"Hello, world!"}`
 
 ### `GET /ping`
 
@@ -505,102 +316,44 @@ curl http://localhost:8080/
 curl http://localhost:8080/ping
 ```
 
-响应: `{"message": "pong"}`
+Example response: `{"message":"pong"}`
 
 ---
 
-## 支持的模型
+## Environment variables
 
-完整清单以 `GET /v1/models` 为准（只列实测打得通的 id）。
+| Variable | Description | Default |
+|---|---|---|
+| `Authorization` | Local API key | Unset; authentication disabled |
+| `PROXY_URL` | Outbound proxy | Unset |
+| `PREFIX` | URL prefix | Unset |
+| `TLS_CERT` | TLS certificate path | Unset |
+| `TLS_KEY` | TLS key path | Unset |
 
-### 通用模型
+Existing proxy configuration precedence: `PROXY_URL`, `proxies.txt` (one URL per line), then `http_proxy`.
 
-| 模型 ID | 说明 |
-|---------|------|
-| `claude-haiku-4-5` | Anthropic Claude Haiku 4.5 |
-| `mistral-small-2603` | Mistral Small 4 |
-| `tinfoil/gemma4-31b` | Google Gemma 4 31B |
+## HTTP errors
 
-### 推理模型
+| Status | Meaning |
+|---|---|
+| 200 | Successful response |
+| 400 | Invalid request / input limit |
+| 401 | Authentication required or invalid |
+| 404 | Missing resource |
+| 418 | Upstream request rejected/challenged |
+| 429 | Upstream rate limited |
+| 500 | Gateway or upstream failure |
 
-| 模型 ID | 说明 |
-|---------|------|
-| `gpt-5.4-mini` | OpenAI GPT-5.4 Mini（推理） |
-| `gpt-5.6-luna` | OpenAI GPT-5.6 Luna（推理） |
-| `gpt-6-luna` | OpenAI GPT-6 Luna |
+The gateway contains handling for 418/429; a response code does not guarantee automatic recovery.
 
----
+## Implementation notes
 
-## 环境变量
+**Image generation:** The gateway uses Duck.ai chat endpoints and image-specific tool selection or native image models. SSE messages can contain image-bearing UI components and base64 JPEG payloads; partial images are not returned as the final result.
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `Authorization` | API 认证 Key | 无（不设置则无需认证） |
-| `PROXY_URL` | 代理地址 | 无 |
-| `PREFIX` | URL 前缀 | 无 |
-| `TLS_CERT` | TLS 证书路径 | 无 |
-| `TLS_KEY` | TLS 密钥路径 | 无 |
+**Reasoning:** The gateway translates `reasoning_effort` into the upstream `reasoningEffort` setting according to its current mapping. Not all upstream effort values correspond one-to-one with OpenAI conventions.
 
-### 代理配置
+**Transcription:** Audio bytes are sent to Duck.ai's dictation endpoint with the corresponding content type and the gateway's request authentication state.
 
-支持三种代理方式（按优先级）：
+**Speech:** WebRTC connects using ICE-server and session-signaling endpoints, uses the `pion/webrtc` library, and returns audio from its data/media channels. FFmpeg performs format conversion where required.
 
-1. `PROXY_URL` 环境变量
-2. `proxies.txt` 文件（每行一个代理地址，轮询使用）
-3. `http_proxy` 环境变量
-
-`proxies.txt` 示例：
-```
-http://proxy1.example.com:8080
-http://proxy2.example.com:8080
-socks5://proxy3.example.com:1080
-```
-
----
-
-## 错误码
-
-| HTTP 状态码 | 说明 |
-|-------------|------|
-| 200 | 成功 |
-| 400 | 请求参数错误 |
-| 401 | 认证失败 |
-| 404 | 资源不存在 |
-| 418 | Duck.ai 请求限制（自动重试） |
-| 429 | 请求频率限制（自动重试） |
-| 500 | 服务器内部错误 |
-
----
-
-## 技术细节
-
-### 图像生成原理
-
-- 使用 Duck.ai 的 `/duckchat/v1/chat` 端点
-- 通过 `metadata.toolChoice.GenerateImage: true` 启用图像生成
-- SSE 响应中包含 `ui-component` 类型的消息，`data` 字段中包含 `b64Image`（base64 图片数据）
-- 图片格式为 JPEG，以 `data:image/jpeg;base64,...` 形式返回
-- 图片自动缩放到 512px 并转为 WebP 格式发送给 DuckDuckGo
-
-### 推理模式原理
-
-- Duck.ai 的推理模型（如 gpt-5.4-mini）支持 `reasoningEffort` 参数
-- 用户传入 `reasoning_effort: "high"/"max"/"xhigh"` 映射为 Duck.ai 的 `"low"`（推理模式）
-- 不传或传其他值映射为 `"none"`（快速模式）
-
-### 语音转文字原理
-
-- 调用 Duck.ai 的 `/duckchat/v1/dictation` 端点
-- 音频以原始二进制发送，`Content-Type` 为音频格式
-- 使用相同的 VQD 认证机制
-- 支持重试（418/429 错误自动重试）
-
-### 文字转语音原理
-
-- 通过 WebRTC 连接 Duck.ai 的 OpenAI Realtime API
-- 端点：`GET /duckchat/v1/ice-servers`（获取 ICE 服务器）、`POST /duckchat/v1/session`（SDP 信令交换）
-- 使用 `pion/webrtc` 库建立 WebRTC PeerConnection
-- 通过 DataChannel（`duckai-voice-session`）发送文字，接收控制事件
-- 通过 MediaTrack 接收 AI 语音（Opus 格式）
-- 使用 FFmpeg 将 OGG/Opus 转换为用户请求的格式（MP3/WAV/FLAC/AAC）
-- 模型：`gpt-realtime-mini-2025-12-15`
+**Experimental status:** These endpoints depend on undocumented upstream behavior; they have not been independently revalidated during this English localization.

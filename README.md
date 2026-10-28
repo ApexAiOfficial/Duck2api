@@ -1,166 +1,152 @@
 # Duck2API
 
-DuckDuckGo AI Chat 转 OpenAI 兼容 API 代理。支持 Chat Completions、图像生成/编辑、文件上传问答、语音转文字、文字转语音、推理模式、网络搜索等完整功能。
-## 接口文档
+An OpenAI-compatible API gateway backed by DuckDuckGo AI Chat. It supports chat completions, the Responses API, image generation and editing, uploaded-file Q&A, transcription, text-to-speech, reasoning modes, web search, and experimental client-side tool calling.
 
-curl 示例请查看：[API.md](API.md)
+> **Experimental integration:** Duck.ai does not provide a supported public API for this gateway. The upstream website and model availability can change without notice. Follow the provider's terms and usage limits.
 
-## 部署
+## API documentation
 
-### 编译部署
+See [API.md](API.md) for endpoint reference and curl examples.
+
+## Deployment
+
+### Build from source
 
 ```bash
-git clone https://github.com/aurora-develop/duck2api
-cd duck2api
+git clone https://github.com/ApexAiOfficial/Duck2api.git
+cd Duck2api
 go build -o duck2api ./cmd/duck2api
 chmod +x ./duck2api
 ./duck2api
 ```
 
-### Docker 部署
+### Docker
 
 ```bash
-docker run -d \
-  --name duck2api \
-  -p 8080:8080 \
-  ghcr.io/aurora-develop/duck2api:latest
+docker run -d --name duck2api -p 8080:8080 ghcr.io/aurora-develop/duck2api:latest
 ```
 
-### Docker Compose 部署
+**Note:** The image above belongs to the original upstream project, not this fork. Build an image from this repository's Dockerfile to run this fork's code.
+
+### Docker Compose
 
 ```bash
-mkdir duck2api && cd duck2api
-wget https://raw.githubusercontent.com/aurora-develop/duck2api/main/docker-compose.yml
-docker-compose up -d
+git clone https://github.com/ApexAiOfficial/Duck2api.git
+cd Duck2api
+docker compose up -d --build
 ```
 
-### Koyeb 部署
+### Koyeb
 
-[![Deploy to Koyeb](https://www.koyeb.com/static/images/deploy/button.svg)](https://app.koyeb.com/deploy?type=git&builder=dockerfile&dockerfile=Dockerfile&repository=github.com/misakano7545/Duck2api&branch=main&name=duck2api&ports=8080%3Bhttp%3B%2F&env%5BPORT%5D=8080)
+Koyeb can deploy this repository using its `Dockerfile`. The runtime image includes FFmpeg and exposes port 8080. The platform's `PORT` setting must match the exposed port. Check Koyeb's current pricing and free-tier availability before deployment.
 
-按钮走仓库里的 `Dockerfile`（运行时已含 ffmpeg），暴露 8080。Koyeb 会自动把 `PORT` 设成最低的暴露端口（这里即 8080），按钮再显式写一个 `env[PORT]=8080` 把端口钉死 —— 两者必须一致，改端口时一起改。
+| Variable | Required | Description |
+|---|---|---|
+| `Authorization` | No | API authentication key; unset disables authentication. Supply only the key itself, without `Bearer ` in the value. |
+| `PROXY_URL` | No | Optional outbound proxy URL. |
 
-部署后建议在控制面板补环境变量（与上面环境变量表一致）：
+## Features
 
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `Authorization` | 否 | API 认证 Key，形如 `Bearer your_key`；不填则接口不鉴权 |
-| `PROXY_URL` | 否 | 出口代理，形如 `http://user:pass@host:port` |
+| Feature | Endpoint | Notes |
+|---|---|---|
+| Chat Completions | `POST /v1/chat/completions` | Streaming and non-streaming |
+| Responses API | `POST /v1/responses` | OpenAI-compatible response objects |
+| Image generation | `POST /v1/images/generations` | Text to image |
+| Image editing | `POST /v1/images/edits` | Image modification |
+| File upload | `POST /v1/files` | Files for question answering |
+| File management | `GET/DELETE /v1/files/:id` | File information and deletion |
+| Transcription | `POST /v1/audio/transcriptions` | Whisper-compatible request |
+| Speech | `POST /v1/audio/speech` | MP3, WAV, OGG and other formats |
+| Models | `GET /v1/models` | Model discovery |
 
-免费档每月只有 5 小时额度（定价页标 "Free 5h"），常驻要付费实例；区域建议选 `sin`(新加坡) 或 `tyo`(东京)。
+## Quick start
 
-> 出口 IP 提醒：Koyeb 走共享机房出口。若日志里上游返回 `418 ERR_BN_LIMIT`，说明该出口被 duck.ai 拒绝，换区域或用 `PROXY_URL` 挂住宅代理。
-
-## 功能概览
-
-| 功能 | 端点 | 说明 |
-|------|------|------|
-| Chat Completions | `POST /v1/chat/completions` | 流式/非流式对话 |
-| Responses API | `POST /v1/responses` | OpenAI Responses API |
-| 图像生成 | `POST /v1/images/generations` | 文生图 |
-| 图像编辑 | `POST /v1/images/edits` | 图生图/改图 |
-| 文件上传 | `POST /v1/files` | 上传文件用于问答 |
-| 文件管理 | `GET/DELETE /v1/files/:id` | 查询/删除文件 |
-| 语音转文字 | `POST /v1/audio/transcriptions` | Whisper 兼容接口 |
-| 文字转语音 | `POST /v1/audio/speech` | TTS 接口，支持 MP3/WAV/OGG |
-| 模型列表 | `GET /v1/models` | 列出可用模型 |
-
-## 快速开始
-
-### 基础对话
+### Chat
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-4o-mini",
-    "messages": [{"role": "user", "content": "你好"}],
+    "model": "gpt-5.6-luna",
+    "messages": [{"role": "user", "content": "Hello"}],
     "stream": true
   }'
 ```
 
-### 推理模式 (Reasoning)
+### Reasoning modes
 
-使用 `reasoning_effort` 参数控制推理深度：
+Pass `reasoning_effort` to request a reasoning level. Accepted values include `none`, `low`, `medium`, and `high`; actual behavior depends on the upstream model and the gateway's mappings.
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4-mini",
-    "messages": [{"role": "user", "content": "证明勾股定理"}],
+    "messages": [{"role": "user", "content": "Prove the Pythagorean theorem."}],
     "reasoning_effort": "high"
   }'
 ```
 
-支持的值：`none`（快速）、`low`、`medium`、`high`
-
-### 网络搜索
-
-设置 `web_search: true` 启用联网搜索：
+### Web search
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4-nano",
-    "messages": [{"role": "user", "content": "今天的科技新闻"}],
+    "messages": [{"role": "user", "content": "What are the latest technology headlines?"}],
     "web_search": true
   }'
 ```
 
-### 图像生成
+### Image generation
 
-默认走 **duck.ai 原生图片模型**（`POST /duckchat/v1/chat` + `model=image-generation`）：提示词原样进图，不被聊天模型改写。
+By default, the gateway requests Duck.ai's native image model (`image-generation`) through `POST /duckchat/v1/chat`. This is designed to preserve the input prompt instead of having a chat model rewrite it.
 
 ```bash
 curl http://localhost:8080/v1/images/generations \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "一只可爱的猫咪坐在窗台上"}'
+  -d '{"prompt": "A cute cat sitting on a windowsill"}'
 ```
 
-`model` 可以留空；也可以填 **别名**：`gpt-image-1.5` / `gpt-image-1` 等同原生（默认），`gpt-image-2` 等同显式点名工具路径。别名按成品图 C2PA 里能看到的生成器名设计——那些名字本身不是可请求的 id，直传上游只会 404 `ERR_MODEL_UNAVAILABLE`（实测 `gpt-image-1`、`gpt-image-2`、`gpt-image-1-mini`、`dall-e-3` 全 404）。填任意聊天模型名（如 `gpt-5.6-luna`）也走工具路径。那条路多一跳：聊天模型会自己写一份 `imageGenPrompt` 再送进图像服务，实测会把 10 字的原文扩写成 80 字的风格描述；网关现在把提示词包成「原样使用」的指令（`duckgo.StrictImagePrompt`），实测 `revised_prompt` 与用户原文逐字一致。两条路出图不同——原生是 `gpt-image-1.5`，工具路径是 `gpt-image-2`（把返回的 JPEG 丢给 `strings | grep version` 就能看出 C2PA 生成器）。一次请求返回 1 张图；流里那个 `partial-image`/`status:partial` 的扩散中间态（多眼扭曲）不再当输出图返回。
+The `model` parameter may be omitted. Aliases such as `gpt-image-1.5` and `gpt-image-1` select the native route; `gpt-image-2` selects the chat-model tool route. These are gateway aliases based on observed image metadata, **not necessarily upstream model IDs**. Passing an image alias directly to Duck.ai's model endpoint may fail.
 
-### 图像编辑
+When a chat model is selected instead, the gateway requests its `GenerateImage` tool, which can add or rewrite image prompts. The gateway wraps the input in its `StrictImagePrompt` instruction to discourage rewriting. The two routes may use different image generators. Each request returns one final image; intermediate partial-image frames are not treated as final outputs.
+
+### Image editing
 
 ```bash
-# JSON 方式 (base64)
+# JSON with base64-encoded image data
 curl http://localhost:8080/v1/images/edits \
   -H "Content-Type: application/json" \
-  -d '{
-    "image": "<base64编码的图片>",
-    "prompt": "把猫改成蓝色"
-  }'
+  -d '{"image":"<base64-image-data>","prompt":"Change the cat to blue"}'
 
-# 文件上传方式
+# Multipart upload
 curl http://localhost:8080/v1/images/edits \
   -F "image=@cat.png" \
-  -F "prompt=把猫改成蓝色"
+  -F "prompt=Change the cat to blue"
 ```
 
-输入图会真的传给上游（`data:` URL 或裸 base64 都收）。`image` 走固定路径：**原生图片模型**（`image-generation`）+ 图片 part，单请求完成——上游先回 `role:"image-validated"` 验图，再回成品；`model` 字段在改图上不参与选路（「聊天模型 + `GenerateImage` + 图」上游直接回 400 `ERR_BAD_REQUEST`，这条路走不通）。改图指令同样包严格指令，一次返回 1 张成品。
+Image input may be a `data:` URL or raw base64. This operation uses the native image model with an image part; the `model` field does not select an alternative editing route. The upstream validates the image and returns one final result.
 
-### 文件上传与问答
+### Files and Q&A
 
 ```bash
-# 1. 上传文件
 curl http://localhost:8080/v1/files \
   -F "file=@document.pdf" \
   -F "purpose=assistants"
 
-# 返回: {"id": "file-xxx", "object": "file", ...}
-
-# 2. 使用文件进行问答（将文件内容作为上下文）
+# Use the file ID returned by the previous request:
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4-nano",
-    "messages": [{"role": "user", "content": "请总结这个文档"}],
+    "messages": [{"role": "user", "content": "Summarize this document."}],
     "file_ids": ["file-xxx"]
   }'
 ```
 
-### 语音转文字
+### Transcription
 
 ```bash
 curl http://localhost:8080/v1/audio/transcriptions \
@@ -168,40 +154,40 @@ curl http://localhost:8080/v1/audio/transcriptions \
   -F "model=whisper-1"
 ```
 
-支持格式：webm、ogg、mp3、wav、m4a、flac、opus、aac
+Supported input formats include WebM, OGG, MP3, WAV, M4A, FLAC, Opus and AAC.
 
-### 文字转语音
+### Text to speech
 
 ```bash
 curl http://localhost:8080/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"model":"tts-1","input":"你好世界","voice":"alloy","response_format":"mp3"}' \
+  -d '{"model":"tts-1","input":"Hello, world!","voice":"alloy","response_format":"mp3"}' \
   --output speech.mp3
 ```
 
-支持格式：mp3、wav、ogg、flac、aac（底层使用 Duck.ai 的 WebRTC + OpenAI Realtime API）
+Output formats include MP3, WAV, OGG, FLAC and AAC. The underlying implementation uses Duck.ai's WebRTC speech session and FFmpeg where conversion is required.
 
-## 支持的模型
+## Models
 
-| 模型 | 类型 | 说明 |
-|------|------|------|
-| `gpt-6-luna` | 通用 | GPT-6 Luna（上游列表未公开，本项目补入 `/v1/models`） |
-| `gpt-5.6-luna` | 推理 | GPT-5.6 Luna |
-| `gpt-5.4-mini` | 推理 | GPT-5.4 mini |
-| `claude-haiku-4-5` | 通用 | Claude Haiku 4.5 |
-| `tinfoil/gemma4-31b` | 通用 | Gemma 4 31B |
-| `mistral-small-2603` | 通用 | Mistral Small 4 |
-| `image-generation` | 出图 | duck.ai 原生图片模型：文生图与改图默认走它（上游列表未公开，本项目补入 `/v1/models`） |
-| `gpt-image-1.5` | 出图别名 | 等同 `image-generation`，名字取自成品图 C2PA 里的生成器名 |
-| `gpt-image-2` | 出图别名 | 走「聊天模型 + `GenerateImage` 工具」（提示词会被上游改写，本项目已包严格指令） |
+The gateway merges the live `/v1/models` upstream response with locally defined models and aliases. The table below documents the fork's previously reported behavior; **it is not a fresh availability guarantee**.
 
-清单就是 `/v1/models` 的实时输出（直接透传上游 + 补入 `gpt-6-luna` 与三个出图模型/别名），**表里只有实测打得通的 id**：上游仍列出、但匿名档一律 400 的（`gpt-5.6-terra`/`gpt-5.6-sol`/`claude-sonnet-4-6`/`claude-opus-4-8`）和每次 500 的 `tinfoil/gpt-oss-120b` 已从列表摘掉，黑名单见 `internal/initialize/models.go`。要它们得配登录态。读图能力跟模型绑定（`supportsImageUpload`），出图则是独立的原生图片模型（详见下面的图像生成/编辑两节）。
+| Model | Type | Notes |
+|---|---|---|
+| `gpt-6-luna` | General | Added locally even when missing from upstream listing |
+| `gpt-5.6-luna` | Reasoning | GPT-5.6 Luna |
+| `gpt-5.4-mini` | Reasoning | GPT-5.4 mini |
+| `claude-haiku-4-5` | General | Claude Haiku 4.5 |
+| `tinfoil/gemma4-31b` | General | Gemma 4 31B |
+| `mistral-small-2603` | General | Mistral Small 4 |
+| `image-generation` | Images | Native image generation/editing route |
+| `gpt-image-1.5` | Image alias | Maps to the native route |
+| `gpt-image-2` | Image alias | Uses the chat-tool route |
 
-## 高级设置
+The previous maintainer excluded several model identifiers from the public listing after observing upstream errors, including `gpt-5.6-terra`, `gpt-5.6-sol`, `claude-sonnet-4-6`, `claude-opus-4-8` and `tinfoil/gpt-oss-120b`. Check `internal/initialize/models.go` and the current upstream response before assuming access. Image-upload support is model-dependent.
 
-### 配置文件 config.json
+## Advanced configuration
 
-把配置写在项目根目录的 `config.json` 里（照抄 [`config.example.json`](config.example.json)），**键名就是环境变量名**：
+Create `config.json` from [config.example.json](config.example.json). Configuration keys are environment variable names:
 
 ```json
 {
@@ -213,65 +199,60 @@ curl http://localhost:8080/v1/audio/speech \
 }
 ```
 
-优先级：**真实环境变量 > `config.json`**。同一项两处都有时环境变量赢 —— 敏感项适合放部署面板的环境变量，非敏感项放文件。
+**Precedence:** explicitly set environment variables override values in `config.json`. The latter is excluded by `.gitignore`.
 
-`config.json` 已在 `.gitignore` 里（不会被提交），提交的是 `config.example.json`。
-
-### 环境变量
-
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `Authorization` | API 认证 Key（**只填 key 本身，不要带 `Bearer `**；客户端请求时带 `Authorization: Bearer <key>`） | `your_key` |
-| `PROXY_URL` | 代理地址 | `http://proxy:8080` |
-| `PREFIX` | URL 前缀 | `/api` |
-| `TLS_CERT` | TLS 证书路径 | `/path/to/cert.pem` |
-| `TLS_KEY` | TLS 密钥路径 | `/path/to/key.pem` |
-| `MAX_INPUT_TOKENS` | 上游单请求输入上限（网关 tiktoken 计，实测边界在 7,300–8,000 之间）。超了只裁旧历史：工具约定与用户这一轮绝不动；前缀自己就超时回 `400 context_length_exceeded`。负数关闭守卫 | `7500`（默认） |
-
-上游单请求上限实测 ≈4k token（19,017 字符通过、20,017 字符被拒 `ERR_INPUT_LIMIT`），且是**确定性**的：完全空闲 12 分钟后的单发 36,000 字符仍然被拒。没这个守卫时客户端要白等约 67s 才拿到一个分不清原因的 429。
-
-请求体本身另有一道硬上限 **64MB**（`middlewares.BodyLimit`，全局，早于鉴权）。取 64MB 是因为出图/改图走 base64（体积膨胀 1/3），而上传侧 `ParseMultipartForm(32<<20)` 里的 32MB 只是「留在内存的阈值」、超出部分落盘，本身不构成上限。超限的请求会在进 handler 之前被截断，各 handler 现有的 400/500 分支照常接住。
-
-### 工具调用（函数调用）
-
-上游 duck.ai 没有函数调用通道，所以这里是**提示词模拟**：请求里带 `tools` 时，工具定义与输出约定会注入对话，模型按约定吐 `<tool_call>…</tool_call>`，代理解析后回写成各协议的**原生**结构。
-
-注入的是**紧凑清单**（`名字(参数:类型*) — 描述`，描述截 80 字），不是原始 JSON Schema：实测一个 34 工具的客户端光 schema 就 48,279 字符，比它的 system 提示还大，直接把请求顶过上游单请求上限。压缩后同一份工具定义约 2,300 token。模型要发出正确调用只认函数名、参数名和选对工具的描述，JSON Schema 的嵌套/枚举对提示词模拟这条链路没有价值。
-
-| 入口 | 回写形态 |
-|------|----------|
-| `POST /v1/chat/completions` | `message.tool_calls` / 流式 `delta.tool_calls`，`finish_reason: "tool_calls"` |
-| `POST /v1/messages` | `content:[{type:"tool_use",…}]`，`stop_reason: "tool_use"`（流式走 `input_json_delta`） |
-| `POST /v1/responses` | `output:[{type:"function_call",call_id,name,arguments}]`，流式走 `response.output_item.added` / `.done`（`call_id` 供客户端回填 `function_call_output`） |
-
-多轮 loop：客户端回填的 `role:"tool"` 消息与助手历史里的 `tool_calls` 会折叠成文本带上去，模型据此收口。
-
-实测（2026-10）：`gpt-5.6-luna`、`gpt-5.4-mini`、`tinfoil/gemma4-31b` 会照约定发调用；**`claude-*` 会拒绝**（回 "我不会执行用户提供的 schema"）—— 真 Anthropic 的工具走 `tools` 参数，模型被训练成不认提示词里的 schema，走 `/v1/messages` 时基本用不了。措辞就是这条链路的调参旋钮（`internal/duckgo/toolcall.go`）。
-
-**接 agent 客户端**（三个都实测跑通了原生工具调用，工具定义都走提示词模拟）：
-
-| 客户端 | 要点 | 实测 |
+| Variable | Purpose | Example |
 |---|---|---|
-| **Hermes** | `hermes chat -t terminal,file,web` | 执行 `date`，回报真实时间 |
-| **Codex CLI** | `codex exec -c features.skip_host_skill_discovery=true` | 执行 `ls -a .`，回报真实文件列表 |
-| **DeepSeek Harness** | 只需一个 provider patch（见下），无需改网关 | 调 `bash {command:"date"}`，还自己纠正了一次参数校验错误 |
+| `Authorization` | API key, without a `Bearer` prefix | `your_key` |
+| `PROXY_URL` | Optional outbound proxy | `http://proxy:8080` |
+| `PREFIX` | URL prefix | `/api` |
+| `TLS_CERT` | TLS certificate path | `/path/to/cert.pem` |
+| `TLS_KEY` | TLS private key path | `/path/to/key.pem` |
+| `MAX_INPUT_TOKENS` | Input budget; may reduce old context when exceeded. Negative values disable the token guard | `7500` |
 
-三者的请求体积都贴着上游上限，所以各自的「瘦身开关」是必须的：
+Previous tests by the fork maintainer suggested upstream request-size limitations around 19,500 characters for some inputs. These limits are unofficial and subject to change. The gateway also has a **64 MB HTTP request-body limit** (see `middlewares.BodyLimit`); multimedia base64 payloads can be substantially larger than their originals.
 
-- **Hermes**：`-t <toolset>` 挑工具集。system 提示占大头，而工具集越小 Hermes 的 system 提示也跟着越小（36,224 → 14,551 字符）。工具集名取自 `toolsets.TOOLSETS`（`file` 是单数）。实测：默认 34 工具 12,660 token ✗ / `-t terminal,file,web` 10 工具 6,793 ✓。
-- **Codex**：`-c features.skip_host_skill_discovery=true` 关掉 host 技能目录 —— 光那个目录（29 个技能）就 14.7k 字符。带上后请求 7,615 token（`MAX_INPUT_TOKENS` 默认 7,500，会裁掉 1 条旧历史，不影响）。
-- **dsh**：默认就很瘦，不用开关。
+### Tool calling
 
-dsh 的 provider patch（`dsh --patch`）：
+The upstream Duck.ai chat interface does not expose a general native function-calling channel. This gateway therefore uses **prompt-emulated tool calling**:
+
+1. Registered client tools are condensed and included in instructions.
+2. The model is asked to emit `<tool_call>{"name":"tool_name","arguments":{...}}</tool_call>`.
+3. The gateway parses this text and emits standard tool-call response structures for supported client protocols.
+4. **The client**, not the gateway, executes the tool and returns the result.
+
+Tool lists are compacted to reduce upstream input size, using names, parameter names/types and short descriptions instead of the complete JSON Schema. Tool output and prior turns are folded into text for subsequent requests.
+
+| API | Tool-call response |
+|---|---|
+| Chat Completions | `message.tool_calls` or streaming `delta.tool_calls`; `finish_reason: "tool_calls"` |
+| Anthropic Messages | `tool_use` content blocks; `stop_reason: "tool_use"` |
+| Responses | `function_call` or `custom_tool_call` output items |
+
+**Limitations:** Prompt-emulated tool calls are not as reliable as true model-native tool calling. The previous maintainer reported success with some GPT and Gemma models, but Claude-family models frequently declined the simulated contract. This is not guaranteed to work with Claude Code or other agents.
+
+### Coding-agent examples
+
+The previous fork maintainer reported small end-to-end command runs with:
+
+| Client | Reduced setup | Reported smoke test |
+|---|---|---|
+| Hermes | `hermes chat -t terminal,file,web` | Ran `date` |
+| Codex CLI | `codex exec -c features.skip_host_skill_discovery=true` | Ran `ls -a .` |
+| DeepSeek harness | A provider configuration patch | Ran a `bash` command |
+
+These are **historical reports, not independently verified results for this fork**. They also depended on trimming agent prompts and tool catalogs to fit the upstream input budget. In particular, Codex may send custom tools inside `additional_tools` items; these require the gateway to return `custom_tool_call` with an `input` field.
+
+Example provider configuration used by the previous maintainer for a lightweight DeepSeek harness:
 
 ```yaml
 - id: llm-pi-ai
   config:
     providers:
       duckapi:
-        baseURL: https://<你的实例>/v1
+        baseURL: https://<your-instance>/v1
         apiKeyEnv: DUCKAPI_KEY
-        api: openai-completions      # 也可 openai-responses / anthropic-messages
+        api: openai-completions
         models:
           - id: gpt-5.6-luna
 - id: agent-default-model
@@ -280,56 +261,18 @@ dsh 的 provider patch（`dsh --patch`）：
     model: gpt-5.6-luna
 ```
 
-**Codex 的工具通道是特殊的**：它不发顶层 `tools`，而是把工具塞在 `input` 里一个 `type:"additional_tools"` 的项里（外面套 `type:"namespace"`）；其中 `exec` 是 `type:"custom"`（入参为裸 JS 源码、没有 JSON Schema），网关按 `[原始文本输入]` 处理，回写时回成 `custom_tool_call` + `input` 而不是 `function_call`。
+### Outbound proxies and user agents
 
-### 代理池与客户端指纹
+The gateway can read `proxies.txt` (one URL per line) and use `PROXY_URL` or `http_proxy`. Its existing implementation also derives browser-related headers from the configured user agent, and records an identity line at startup. These are implementation details of the experimental integration, not a supported stability guarantee.
 
-支持 `proxies.txt` 文件配置多个代理（每行一个）：
+**Important limitations:** The VQD token is still globally shared rather than isolated per outbound identity. Cross-network isolation has not been independently tested. HTTP 418/429 responses can represent upstream restrictions; users should honor rate limits and the service's terms, rather than rely on identity changes as a way to defeat usage restrictions.
 
-```
-http://proxy1:8080
-http://proxy2:8080
-socks5://proxy3:1080
-```
+## Credits
 
-**每个身份生成一个指纹 UA，不是从固定池子里挑**（`internal/duckgo/ua.go` 的 `RandomUA`）。
-上游按「出口 IP + 客户端指纹」限速，身份之间复用 UA 等于没换身份。
+Thanks to the upstream maintainers and contributors.
 
-- **UA 基本是自由字段。** 实测 12/12 全过：Windows Chrome 131/145、Edge、Android、**Safari
-  （连 Chrome 版本都没有）**、Chrome **100** 与 **160**、Ubuntu/Fedora 的 Linux 串。所以按
-  `平台 × Chrome 版本`（7 × 32）生成，指纹用不完。版本上界按真机存在的版本收（当前 151）——
-  报一个尚未发布的版本是最容易看出来的假 UA。
-- 真正会被拒的是**客户端提示与 UA 自相矛盾**那一类。旧代码把 `sec-ch-ua-platform` 写死
-  `"Linux"`，于是 Windows UA 一律 418 —— 当时被误读成「Windows UA 不被接受」（连 macOS 也被
-  无谓排除）。现在客户端提示由 UA 反推（`chromeHints`），Windows 直接过。**别再加第二张常量表**，
-  两份来源迟早打架。同一个道理的还有挑战环境里的 `navigator.platform`（原先写死 `"Win32"`）、
-  `appVersion`，现在都从 UA 派生。
-- **`sec-ch-ua` 的 grease 品牌与品牌顺序是算出来的**，照抄 Chromium 的
-  `GenerateBrandVersionList`（`"Not"+chars[v%11]+"A"+chars[(v+1)%11]+"Brand"`，版本取
-  `{8,99,24}[v%3]`，顺序按 `v%6` 洗牌）。写死的 `"Not:A;Brand";v="24"` 对多数版本都是错的
-  （145 真值是 `"Not:A-Brand";v="99"`），等于所有出口共用一个编造的常量。
-- **没有代理（直连）时每次启动生成一个新指纹**。要固定就设 `X_USER_AGENT`。
-- 启动时打 `identity` 日志行，换没换指纹看得见。
-
-**限速是按指纹分桶的**（实测）：同一指纹连发，第 6 次吃 `429 challenge_unavailable`；
-**不等冷却**换成新指纹立刻 200。所以换指纹就是换额度 —— 重启换一次，配 `proxies.txt` 则每个
-出口各有一份。
-
-实测（2026-10）：12 个候选 UA **12/12 通过**；连起 8 次生成 **8 个不同指纹**且逐个真打上游通过；
-5 身份轮转连发 7 次 **7/7 = 200、日志 0 次 418/429**（含 Linux↔macOS 回切）。
-
-> `duckgo.Token` 仍是全局单例，没有按身份隔离。实测同一出口 5 个身份轮转不串号（模式见上），
-> 所以没加「每身份一份 token」的开销；**跨出口 IP 是否同样成立没测过**（手上没有节点）。
-> 真机上出现「418 + 身份切换」同现时，这里是第一个要看的地方。
-
-## 鸣谢
-
-感谢各位大佬的 PR 支持。
-
-## 参考项目
-
-- https://github.com/xqdoo00o/ChatGPT-to-API
+Reference project: https://github.com/xqdoo00o/ChatGPT-to-API
 
 ## License
 
-MIT License
+MIT License. See [LICENSE](LICENSE).

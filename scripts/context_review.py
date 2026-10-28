@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""滚动摘要式审查：把任意长度的输入切成块，每轮只发「累计摘要 + 本次片段」。
+"""Rolling-summary review: split input into chunks, sending the cumulative summary and next chunk each turn.
 
-上游单请求上限实测 ≈19,500 字符（ascii 与中文在同一点断，见 README），所以输入总长
-不受上下文限制——被限制的只有「单轮正文」，靠累计摘要把历史压成有界的一段。
+Prior upstream testing suggested an approximately 19,500-character request limit (see README). The full input can exceed this limit because each turn only sends bounded context.
 
   python3 scripts/context_review.py --input README.md --out review.md
-  python3 scripts/context_review.py --self-test          # 不联网，验分块与预算
+  python3 scripts/context_review.py --self-test          # Offline: validate chunking and budgets
 
-环境变量：BASE_URL（网关地址）、AUTH_KEY（网关配了 Authorization 时填）。
+Environment variables: BASE_URL (gateway address), AUTH_KEY (when Authorization is enabled).
 """
 import argparse
 import json
@@ -17,32 +16,31 @@ import time
 import urllib.error
 import urllib.request
 
-MAX_CHARS = 19000  # 上游按字符计（实测 19,500 通过 / 19,750 拒），留余量
-SUMMARY_CHARS = 2500  # 累计摘要预算；片段的剩余空间全给它
+MAX_CHARS = 19000  # Allow headroom beneath the previously observed upstream character limit.
+SUMMARY_CHARS = 2500  # Cumulative summary budget; allocate the rest to the chunk.
 
-INSTRUCTION = """你在做代码/文档审查。你会拿到「已有累计摘要」和「本次新增片段」。
+INSTRUCTION = """You are reviewing code or documentation. You will receive an existing summary and the next input chunk.
 
-只输出下面两段，不要寒暄、不要复述指令：
+Output only the following two sections. Do not add greetings or repeat instructions:
 
-[摘要]
-把已有摘要与本次片段合并成一份不超过 {limit} 字的累计摘要，保留对后续审查有用的事实、
-结论、待查项；无关内容丢掉。
+[Summary]
+Combine the existing summary and new chunk into a summary of at most {limit} characters. Preserve useful facts, conclusions and open questions; discard irrelevant details.
 
-[新发现]
-本次片段里发现的问题，每条一行，格式：位置 — 问题 — 依据。没有就写「无」。
+[New Findings]
+List issues found in this chunk, one per line: location — issue — evidence. If there are none, write 'None'.
 """
 
 
 def split_chunks(text, budget):
-    """按字符切，尽量切在段落边界。每块 <= budget，拼回去与原串完全一致。"""
+    """Split by characters, preferably at paragraph boundaries; reconstruct the original exactly."""
     if budget < 200:
-        raise ValueError("预算太小")
+        raise ValueError("Budget too small")
     out, start = [], 0
     while start < len(text):
         end = min(start + budget, len(text))
         if end < len(text):
             cut = text.rfind("\n\n", start, end)
-            if cut > start + budget // 2:  # 别切太碎
+            if cut > start + budget // 2:  # Avoid tiny chunks.
                 end = cut
         out.append(text[start:end])
         start = end
@@ -51,17 +49,17 @@ def split_chunks(text, budget):
 
 def build_prompt(summary, piece):
     instr = INSTRUCTION.format(limit=SUMMARY_CHARS)
-    prior = summary or "（这是第一块，还没有摘要）"
-    return f"{instr}\n[已有累计摘要]\n{prior}\n\n[本次新增片段]\n{piece}\n"
+    prior = summary or "(First chunk, no existing summary)"
+    return f"{instr}\n[Existing Summary]\n{prior}\n\n[New Chunk]\n{piece}\n"
 
 
 def parse(out):
-    """取出 [摘要] 与 [新发现] 两段；模型偶尔加壳也不至于丢内容。"""
+    """Extract Summary and New Findings sections, tolerating extra output formatting."""
     summary, findings = "", ""
-    if "[摘要]" in out:
-        summary = out.split("[摘要]", 1)[1]
-    if "[新发现]" in summary:
-        summary, findings = summary.split("[新发现]", 1)
+    if "[Summary]" in out:
+        summary = out.split("[Summary]", 1)[1]
+    if "[New Findings]" in summary:
+        summary, findings = summary.split("[New Findings]", 1)
     return summary.strip(), findings.strip()
 
 
@@ -77,19 +75,19 @@ def call(base, model, key, prompt, timeout=180):
 
 
 def self_test():
-    # 分块：任一块都不超预算，且拼回去逐字一致（不丢、不重）
-    text = "段落甲。\n\n" + ("很长的一段" * 900) + "\n\n段落乙。"
+    # Chunks stay within the budget and reconstruct the input exactly.
+    text = "Paragraph A.\n\n" + ("Long paragraph" * 900) + "\n\nParagraph B."
     chunks = split_chunks(text, 3000)
     assert len(chunks) > 1, chunks
     assert all(len(c) <= 3000 for c in chunks), [len(c) for c in chunks]
-    assert "".join(chunks) == text, "拼接后与原文不一致"
-    assert "段落甲。" in chunks[0] and "段落乙。" in chunks[-1]
-    # 预算算得住：指令 + 摘要 + 片段 <= MAX_CHARS
-    prompt = build_prompt("摘" * SUMMARY_CHARS, "片" * (MAX_CHARS - 6000))
+    assert "".join(chunks) == text, "Reassembled text differs from the original"
+    assert "Paragraph A." in chunks[0] and "Paragraph B." in chunks[-1]
+    # Instructions + summary + chunk must fit within MAX_CHARS.
+    prompt = build_prompt("S" * SUMMARY_CHARS, "P" * (MAX_CHARS - 6000))
     assert len(prompt) <= MAX_CHARS, len(prompt)
-    # 解析
-    s, f = parse("[摘要]\n已看完前半。\n[新发现]\nREADME.md:12 — 上限写错 — 实测 19.5k")
-    assert s == "已看完前半。" and f.startswith("README.md:12"), (s, f)
+    # Parsing
+    s, f = parse("[Summary]\nReviewed the first half.\n[New Findings]\nREADME.md:12 — Incorrect limit — Observed 19.5k")
+    assert s == "Reviewed the first half." and f.startswith("README.md:12"), (s, f)
     print("self-test ok")
 
 
@@ -105,43 +103,43 @@ def main():
         self_test()
         return 0
     if not args.input:
-        ap.error("--input 必填")
+        ap.error("--input is required")
 
     base = os.getenv("BASE_URL", "").rstrip("/")
     if not base:
-        sys.exit("BASE_URL 未设置（例：https://xxx.koyeb.app/v1）")
+        sys.exit("BASE_URL is not set (e.g. https://xxx.koyeb.app/v1)")
     key = os.getenv("AUTH_KEY", "")
 
     text = open(args.input, encoding="utf-8").read()
-    # 每轮能放多少正文：总预算 - 指令 - 摘要预留
+    # Calculate remaining chunk budget after instructions and summary reserve.
     piece_budget = MAX_CHARS - len(INSTRUCTION.format(limit=SUMMARY_CHARS)) - SUMMARY_CHARS - 40
     chunks = split_chunks(text, piece_budget)
-    print(f"输入 {len(text)} 字符 → {len(chunks)} 块，每块 ≤{piece_budget} 字符", flush=True)
+    print(f"Input {len(text)} chars → {len(chunks)} chunks, maximum {piece_budget} chars each", flush=True)
 
     summary, findings_all = "", []
     with open(args.out, "w", encoding="utf-8") as rep:
-        rep.write(f"# 审查报告：{args.input}\n\n模型 `{args.model}`，{len(chunks)} 块，滚动摘要。\n\n")
+        rep.write(f"# Review Report: {args.input}\n\nModel `{args.model}`, {len(chunks)} chunks, rolling summary.\n\n")
         for i, piece in enumerate(chunks, 1):
             prompt = build_prompt(summary, piece)
-            for attempt in (1, 2):  # 上游抖动重试一次，仍失败就让 CI 红
+            for attempt in (1, 2):  # Retry transient upstream failures once, then fail CI.
                 try:
                     out = call(base, args.model, key, prompt)
                     break
                 except (urllib.error.URLError, urllib.error.HTTPError, OSError, KeyError) as e:
                     if attempt == 2:
-                        rep.write(f"\n## 第 {i} 块\n\n**失败**：{e}\n")
+                        rep.write(f"\n## Chunk {i}\n\n**Failed**：{e}\n")
                         rep.flush()
-                        sys.exit(f"第 {i} 块调用失败：{e}")
+                        sys.exit(f"Chunk {i} request failed：{e}")
                     time.sleep(20)
             summary, findings = parse(out)
-            summary = summary[:SUMMARY_CHARS]  # 摘要不能自己滚大
+            summary = summary[:SUMMARY_CHARS]  # Keep the summary within its size limit.
             findings_all.append(findings)
-            print(f"  [{i}/{len(chunks)}] 摘要 {len(summary)} 字，本块发现 {len(findings)} 字", flush=True)
-            rep.write(f"\n## 第 {i} 块\n\n{findings or '无'}\n")
+            print(f"  [{i}/{len(chunks)}] summary {len(summary)} chars, findings {len(findings)} chars", flush=True)
+            rep.write(f"\n## Chunk {i}\n\n{findings or 'None'}\n")
             rep.flush()
             time.sleep(2)
-        rep.write(f"\n---\n\n## 最终累计摘要\n\n{summary}\n")
-    print(f"完成 → {args.out}")
+        rep.write(f"\n---\n\n## Final Cumulative Summary\n\n{summary}\n")
+    print(f"Completed → {args.out}")
     return 0
 
 

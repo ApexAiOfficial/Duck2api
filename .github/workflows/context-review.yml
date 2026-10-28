@@ -1,17 +1,18 @@
 name: Context Review
 
-# 用线上网关做「滚动摘要式长文审查」：输入可以任意长，单轮只发摘要+片段（上游上限 ≈19,500 字符）。
+# Review arbitrarily long inputs with rolling summaries. Each turn sends only
+# the accumulated summary and the next chunk (upstream limit: ~19,500 characters).
 on:
   workflow_dispatch:
     inputs:
       path:
-        description: 要审查的文件
+        description: File to review
         default: README.md
       model:
-        description: 模型 id
+        description: Model ID
         default: gpt-5.6-luna
   schedule:
-    - cron: "0 2 * * 1" # 每周一 02:00 UTC
+    - cron: "0 2 * * 1" # Every Monday at 02:00 UTC
 
 permissions:
   contents: read
@@ -26,17 +27,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: self-test（不联网）
+      - name: Self-test (offline)
         run: python3 scripts/context_review.py --self-test
 
-      - name: review
+      - name: Review
         env:
           BASE_URL: ${{ vars.DUCK2API_BASE_URL }}
           AUTH_KEY: ${{ secrets.DUCK2API_AUTH_KEY }}
           MODEL: ${{ inputs.model || 'gpt-5.6-luna' }}
           TARGET: ${{ inputs.path || 'README.md' }}
         run: |
-          test -n "$BASE_URL" || { echo "::error::先设置仓库变量 DUCK2API_BASE_URL（形如 https://xxx.koyeb.app/v1）"; exit 1; }
+          test -n "$BASE_URL" || { echo "::error::Set repository variable DUCK2API_BASE_URL (for example https://xxx.koyeb.app/v1)"; exit 1; }
           python3 scripts/context_review.py --input "$TARGET" --out review.md --model "$MODEL"
           cat review.md >> "$GITHUB_STEP_SUMMARY"
 
